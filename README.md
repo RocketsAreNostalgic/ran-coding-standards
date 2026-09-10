@@ -66,4 +66,4 @@ composer install --no-interaction
 composer check
 ```
 
-`composer test` verifies that every exported PHPCS standard resolves through the installed dependency graph.
+`composer check` performs strict Composer validation and verifies that every exported PHPCS standard resolves, that the declared inheritance and shared/local configuration boundary remain intact, and that clean consumer fixtures execute through both public WordPress profiles.
