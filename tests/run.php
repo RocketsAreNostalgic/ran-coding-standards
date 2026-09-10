@@ -36,17 +36,13 @@ $forbiddenSettingPatterns = array(
 $repositoryNamespacePattern = '/^(?:RAN|RocketsAreNostalgic)\\\\[A-Za-z_][A-Za-z0-9_\\\\]*$/i';
 $inspectedRulesets           = array();
 
-$inspectRuleset = static function (string $standard) use (&$inspectRuleset, &$inspectedRulesets, $rulesets, $requiredRules, $forbiddenSettingPatterns, $repositoryNamespacePattern): void {
-    if (isset($inspectedRulesets[$standard])) {
+$inspectRuleset = static function (string $standard) use (&$inspectRuleset, &$inspectedRulesets, $root, $rulesets, $requiredRules, $forbiddenSettingPatterns, $repositoryNamespacePattern): void {
+    $ruleset = $rulesets[$standard] ?? $standard;
+    if (isset($inspectedRulesets[$ruleset])) {
         return;
     }
 
-    if (!isset($rulesets[$standard])) {
-        fwrite(STDERR, sprintf("Unknown package-owned standard %s.\n", $standard));
-        exit(1);
-    }
-
-    $document = simplexml_load_file($rulesets[$standard], 'SimpleXMLElement', LIBXML_NONET);
+    $document = simplexml_load_file($ruleset, 'SimpleXMLElement', LIBXML_NONET);
     if (false === $document) {
         fwrite(STDERR, sprintf("Could not parse %s ruleset.\n", $standard));
         exit(1);
@@ -63,7 +59,7 @@ $inspectRuleset = static function (string $standard) use (&$inspectRuleset, &$in
         $activeRules[] = (string) $ruleNode['ref'];
     }
 
-    foreach ($requiredRules[$standard] as $requiredRule) {
+    foreach ($requiredRules[$standard] ?? array() as $requiredRule) {
         if (!in_array($requiredRule, $activeRules, true)) {
             fwrite(STDERR, sprintf("%s is missing active rule %s.\n", $standard, $requiredRule));
             exit(1);
@@ -100,11 +96,28 @@ $inspectRuleset = static function (string $standard) use (&$inspectRuleset, &$in
         }
     }
 
-    $inspectedRulesets[$standard] = true;
+    $inspectedRulesets[$ruleset] = true;
 
     foreach ($activeRules as $activeRule) {
         if (isset($rulesets[$activeRule])) {
             $inspectRuleset($activeRule);
+            continue;
+        }
+
+        // Inspect local file/directory references as well as public standard names.
+        foreach (array(dirname($ruleset) . '/' . $activeRule, $root . '/' . $activeRule, $activeRule) as $candidate) {
+            if (is_dir($candidate)) {
+                $candidate .= '/ruleset.xml';
+            }
+            $resolved = realpath($candidate);
+            if (false !== $resolved && is_file($resolved)
+                && 0 === strpos($resolved, $root . '/')
+                && 0 !== strpos($resolved, $root . '/vendor/')
+                && 'xml' === pathinfo($resolved, PATHINFO_EXTENSION)
+            ) {
+                $inspectRuleset($resolved);
+                break;
+            }
         }
     }
 };
