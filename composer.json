@@ -9,11 +9,13 @@
     "require": {
         "php": ">=7.4",
         "dealerdirect/phpcodesniffer-composer-installer": "^1.1",
-        "phpcompatibility/php-compatibility": "10.0.0-alpha2",
-        "phpcompatibility/phpcompatibility-paragonie": "2.0.0-alpha2",
-        "phpcompatibility/phpcompatibility-wp": "3.0.0-alpha2",
         "squizlabs/php_codesniffer": "^3.13.6",
         "wp-coding-standards/wpcs": "^3.4.1"
+    },
+    "require-dev": {
+        "phpcompatibility/php-compatibility": "10.0.0-alpha2",
+        "phpcompatibility/phpcompatibility-paragonie": "2.0.0-alpha2",
+        "phpcompatibility/phpcompatibility-wp": "3.0.0-alpha2"
     },
     "config": {
         "allow-plugins": {
@@ -26,10 +28,12 @@
     },
     "scripts": {
         "validate:strict": "composer validate --strict --no-check-publish --no-check-all",
+        "test:consumer-install": "@php tests/consumer-install.php",
         "test": "@php tests/run.php",
         "check": [
             "@validate:strict",
-            "@test"
+            "@test",
+            "@test:consumer-install"
         ]
     }
 }

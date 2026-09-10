@@ -13,11 +13,33 @@ The package implements the PHP portion of the RAN organisation quality policy. I
 
 The plugin and library profiles intentionally begin as thin named profiles over `RANWordPress`. Separate names allow future divergence to be explicit and versioned rather than inferred from consumer exceptions.
 
+## Consumer installation
+
+A consumer can install the package from a root that keeps Composer's default stable minimum:
+
+```json
+{
+    "require-dev": {
+        "ran/coding-standards": "^1.0",
+        "phpcompatibility/php-compatibility": "10.0.0-alpha2",
+        "phpcompatibility/phpcompatibility-paragonie": "2.0.0-alpha2",
+        "phpcompatibility/phpcompatibility-wp": "3.0.0-alpha2"
+    },
+    "config": {
+        "allow-plugins": {
+            "dealerdirect/phpcodesniffer-composer-installer": true
+        }
+    }
+}
+```
+
+Composer ignores dependency packages' `minimum-stability` and `config.allow-plugins` settings. The distributable package therefore has only stable unconditional dependencies. A consumer using `RANWordPress`, `RANWordPressPlugin`, or `RANWordPressLibrary` must explicitly require the exact reviewed PHPCompatibility generation above in its root development dependencies, or deliberately adopt an equivalent later stable generation after review. The consumer root must also grant `dealerdirect/phpcodesniffer-composer-installer` permission itself.
+
 ## Consumer responsibilities
 
 A consumer remains responsible for its actual project contract, including:
 
-- `minimum_supported_wp_version`;
+- `minimum_wp_version`;
 - PHPCompatibility `testVersion` matching its declared PHP support;
 - namespace/global prefixes;
 - text domain;
@@ -31,7 +53,7 @@ Example:
 ```xml
 <?xml version="1.0"?>
 <ruleset name="Project">
-    <config name="minimum_supported_wp_version" value="7.0"/>
+    <config name="minimum_wp_version" value="7.0"/>
     <config name="testVersion" value="8.4-8.5"/>
 
     <file>.</file>
@@ -55,7 +77,7 @@ Example:
 
 WPCS 3.4.1 currently requires PHP_CodeSniffer 3.x, so the initial package stays on PHPCS `^3.13.6`. A PHPCS 4 migration should be a deliberate package major/minor change once the WordPress standards stack supports it cleanly.
 
-PHPCompatibilityWP 3 remains pre-stable but is the generation that provides PHP 8 compatibility data. Consumers still define the compatibility range locally.
+PHPCompatibilityWP 3 remains pre-stable but is the generation that provides PHP 8 compatibility data. It is pinned in this repository's development dependencies for package verification, while WordPress-profile consumers explicitly own their reviewed PHPCompatibility generation and compatibility range.
 
 ## Development
 
@@ -66,4 +88,4 @@ composer install --no-interaction
 composer check
 ```
 
-`composer check` performs strict Composer validation and verifies that every exported PHPCS standard resolves, that the declared inheritance and shared/local configuration boundary remain intact, and that clean consumer fixtures execute through both public WordPress profiles.
+`composer check` performs strict Composer validation, proves stable-root consumer installation without transitive alpha dependencies, verifies every exported PHPCS standard resolves with active inheritance and no consumer configuration, and runs positive and negative behavioral fixtures through both public WordPress profiles.

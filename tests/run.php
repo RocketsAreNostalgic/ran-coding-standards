@@ -10,24 +10,6 @@ if (!is_file($phpcs)) {
     exit(1);
 }
 
-$standards = array(
-    'RAN',
-    'RANWordPress',
-    'RANWordPressPlugin',
-    'RANWordPressLibrary',
-);
-
-foreach ($standards as $standard) {
-    $output  = array();
-    $command = escapeshellarg($phpcs) . ' -e --standard=' . escapeshellarg($standard) . ' 2>&1';
-    exec($command, $output, $status);
-
-    if (0 !== $status) {
-        fwrite(STDERR, sprintf("Standard %s failed to resolve:\n%s\n", $standard, implode("\n", $output)));
-        exit($status);
-    }
-}
-
 $rulesets = array(
     'RAN'                 => $root . '/RAN/ruleset.xml',
     'RANWordPress'        => $root . '/RANWordPress/ruleset.xml',
@@ -35,11 +17,11 @@ $rulesets = array(
     'RANWordPressLibrary' => $root . '/RANWordPressLibrary/ruleset.xml',
 );
 
-$requiredFragments = array(
-    'RAN'                 => array('<rule ref="Generic.PHP.Syntax"/>'),
-    'RANWordPress'        => array('<rule ref="RAN"/>', '<rule ref="PHPCompatibilityWP"/>', '<rule ref="WordPress-Extra">'),
-    'RANWordPressPlugin'  => array('<rule ref="RANWordPress"/>'),
-    'RANWordPressLibrary' => array('<rule ref="RANWordPress"/>'),
+$requiredRules = array(
+    'RAN'                 => array('Generic.PHP.Syntax'),
+    'RANWordPress'        => array('RAN', 'PHPCompatibilityWP', 'WordPress-Extra'),
+    'RANWordPressPlugin'  => array('RANWordPress'),
+    'RANWordPressLibrary' => array('RANWordPress'),
 );
 
 $forbiddenSettingPatterns = array(
@@ -52,25 +34,40 @@ $forbiddenSettingPatterns = array(
 );
 
 $repositoryNamespacePattern = '/^(?:RAN|RocketsAreNostalgic)\\\\[A-Za-z_][A-Za-z0-9_\\\\]*$/i';
+$inspectedRulesets           = array();
 
-foreach ($rulesets as $standard => $ruleset) {
-    $content = file_get_contents($ruleset);
-    if (false === $content) {
-        fwrite(STDERR, sprintf("Could not read %s ruleset.\n", $standard));
+$inspectRuleset = static function (string $standard) use (&$inspectRuleset, &$inspectedRulesets, $rulesets, $requiredRules, $forbiddenSettingPatterns, $repositoryNamespacePattern): void {
+    if (isset($inspectedRulesets[$standard])) {
+        return;
+    }
+
+    if (!isset($rulesets[$standard])) {
+        fwrite(STDERR, sprintf("Unknown package-owned standard %s.\n", $standard));
         exit(1);
     }
 
-    foreach ($requiredFragments[$standard] as $fragment) {
-        if (false === strpos($content, $fragment)) {
-            fwrite(STDERR, sprintf("%s is missing required inheritance fragment: %s\n", $standard, $fragment));
+    $document = simplexml_load_file($rulesets[$standard], 'SimpleXMLElement', LIBXML_NONET);
+    if (false === $document) {
+        fwrite(STDERR, sprintf("Could not parse %s ruleset.\n", $standard));
+        exit(1);
+    }
+
+    $ruleNodes = $document->xpath('/ruleset/rule[@ref]');
+    if (false === $ruleNodes) {
+        fwrite(STDERR, sprintf("Could not inspect active rules in %s.\n", $standard));
+        exit(1);
+    }
+
+    $activeRules = array();
+    foreach ($ruleNodes as $ruleNode) {
+        $activeRules[] = (string) $ruleNode['ref'];
+    }
+
+    foreach ($requiredRules[$standard] as $requiredRule) {
+        if (!in_array($requiredRule, $activeRules, true)) {
+            fwrite(STDERR, sprintf("%s is missing active rule %s.\n", $standard, $requiredRule));
             exit(1);
         }
-    }
-
-    $document = simplexml_load_string($content, 'SimpleXMLElement', LIBXML_NONET);
-    if (false === $document) {
-        fwrite(STDERR, sprintf("%s is not valid XML.\n", $standard));
-        exit(1);
     }
 
     $settingNodes = $document->xpath('//config[@name] | //property[@name]');
@@ -102,6 +99,27 @@ foreach ($rulesets as $standard => $ruleset) {
             exit(1);
         }
     }
+
+    $inspectedRulesets[$standard] = true;
+
+    foreach ($activeRules as $activeRule) {
+        if (isset($rulesets[$activeRule])) {
+            $inspectRuleset($activeRule);
+        }
+    }
+};
+
+foreach (array_keys($rulesets) as $standard) {
+    $output  = array();
+    $command = escapeshellarg($phpcs) . ' -e --standard=' . escapeshellarg($standard) . ' 2>&1';
+    exec($command, $output, $status);
+
+    if (0 !== $status) {
+        fwrite(STDERR, sprintf("Standard %s failed to resolve:\n%s\n", $standard, implode("\n", $output)));
+        exit($status);
+    }
+
+    $inspectRuleset($standard);
 }
 
 $tmp = sys_get_temp_dir() . '/ran-coding-standards-' . bin2hex(random_bytes(6));
@@ -110,16 +128,19 @@ if (!mkdir($tmp) && !is_dir($tmp)) {
     exit(1);
 }
 
-$valid          = $tmp . '/valid.php';
-$invalid        = $tmp . '/invalid.php';
-$wordpress      = $tmp . '/ran-shared-profile-fixture.php';
-$pluginRuleset  = $tmp . '/plugin-ruleset.xml';
-$libraryRuleset = $tmp . '/library-ruleset.xml';
-$temporaryFiles = array($valid, $invalid, $wordpress, $pluginRuleset, $libraryRuleset);
+$fixtures = array(
+    'valid'         => $tmp . '/valid.php',
+    'syntaxInvalid' => $tmp . '/syntax-invalid.php',
+    'wordpress'     => $tmp . '/ran-shared-profile-fixture.php',
+    'compatInvalid' => $tmp . '/compatibility-invalid.php',
+    'prefixInvalid' => $tmp . '/prefix-invalid.php',
+    'pluginRuleset' => $tmp . '/plugin-ruleset.xml',
+    'libraryRuleset'=> $tmp . '/library-ruleset.xml',
+);
 
 register_shutdown_function(
-    static function () use ($temporaryFiles, $tmp): void {
-        foreach ($temporaryFiles as $file) {
+    static function () use ($fixtures, $tmp): void {
+        foreach ($fixtures as $file) {
             if (is_file($file)) {
                 @unlink($file);
             }
@@ -130,17 +151,10 @@ register_shutdown_function(
     }
 );
 
-if (false === file_put_contents($valid, "<?php\n\ndeclare(strict_types=1);\n\nfunction ran_fixture(): void {}\n")) {
-    fwrite(STDERR, "Could not write the valid PHPCS fixture.\n");
-    exit(1);
-}
-
-if (false === file_put_contents($invalid, "<?php\n\nfunction ran_fixture( {\n")) {
-    fwrite(STDERR, "Could not write the invalid PHPCS fixture.\n");
-    exit(1);
-}
-
-$wordpressFixture = <<<'PHP'
+$fixtureContents = array(
+    'valid' => "<?php\n\ndeclare(strict_types=1);\n\nfunction ran_fixture(): void {}\n",
+    'syntaxInvalid' => "<?php\n\nfunction ran_fixture( {\n",
+    'wordpress' => <<<'PHP'
 <?php
 /**
  * Shared RAN WordPress profile fixture.
@@ -163,18 +177,45 @@ final class Example {
 		return true;
 	}
 }
-PHP;
+PHP,
+    'compatInvalid' => <<<'PHP'
+<?php
+/**
+ * Compatibility-negative fixture.
+ *
+ * @package RANFixture
+ */
 
-if (false === file_put_contents($wordpress, $wordpressFixture . "\n")) {
-    fwrite(STDERR, "Could not write the WordPress profile fixture.\n");
-    exit(1);
+namespace RANFixture;
+
+get_debug_type( true );
+PHP,
+    'prefixInvalid' => <<<'PHP'
+<?php
+/**
+ * Prefix-negative fixture.
+ *
+ * @package RANFixture
+ */
+
+function unrelated_global_fixture() {
+	return true;
+}
+PHP,
+);
+
+foreach ($fixtureContents as $fixture => $content) {
+    if (false === file_put_contents($fixtures[$fixture], $content . "\n")) {
+        fwrite(STDERR, sprintf("Could not write the %s fixture.\n", $fixture));
+        exit(1);
+    }
 }
 
 $consumerRulesetTemplate = <<<'XML'
 <?xml version="1.0"?>
 <ruleset name="RAN Consumer Fixture">
     <config name="minimum_wp_version" value="7.0"/>
-    <config name="testVersion" value="7.4-8.5"/>
+    <config name="testVersion" value="7.4-7.4"/>
     <rule ref="%s"/>
     <rule ref="WordPress.NamingConventions.PrefixAllGlobals">
         <properties>
@@ -193,41 +234,65 @@ $consumerRulesetTemplate = <<<'XML'
 </ruleset>
 XML;
 
-if (false === file_put_contents($pluginRuleset, sprintf($consumerRulesetTemplate, 'RANWordPressPlugin') . "\n")) {
-    fwrite(STDERR, "Could not write the plugin consumer ruleset.\n");
-    exit(1);
-}
-
-if (false === file_put_contents($libraryRuleset, sprintf($consumerRulesetTemplate, 'RANWordPressLibrary') . "\n")) {
-    fwrite(STDERR, "Could not write the library consumer ruleset.\n");
-    exit(1);
-}
-
-$output       = array();
-$validCommand = escapeshellarg($phpcs) . ' --standard=RAN ' . escapeshellarg($valid) . ' 2>&1';
-exec($validCommand, $output, $status);
-if (0 !== $status) {
-    fwrite(STDERR, "RAN rejected a syntactically valid fixture:\n" . implode("\n", $output) . "\n");
-    exit($status);
-}
-
-$output         = array();
-$invalidCommand = escapeshellarg($phpcs) . ' --standard=RAN ' . escapeshellarg($invalid) . ' 2>&1';
-exec($invalidCommand, $output, $status);
-if (0 === $status) {
-    fwrite(STDERR, "RAN failed to reject a syntax-error fixture.\n");
-    exit(1);
-}
-
-foreach (array('plugin' => $pluginRuleset, 'library' => $libraryRuleset) as $profile => $consumerRuleset) {
-    $output  = array();
-    $command = escapeshellarg($phpcs) . ' --standard=' . escapeshellarg($consumerRuleset) . ' ' . escapeshellarg($wordpress) . ' 2>&1';
-    exec($command, $output, $status);
-
-    if (0 !== $status) {
-        fwrite(STDERR, sprintf("The %s WordPress profile rejected the clean consumer fixture:\n%s\n", $profile, implode("\n", $output)));
-        exit($status);
+foreach (array('pluginRuleset' => 'RANWordPressPlugin', 'libraryRuleset' => 'RANWordPressLibrary') as $fixture => $standard) {
+    if (false === file_put_contents($fixtures[$fixture], sprintf($consumerRulesetTemplate, $standard) . "\n")) {
+        fwrite(STDERR, sprintf("Could not write the %s consumer ruleset.\n", $standard));
+        exit(1);
     }
 }
 
-fwrite(STDOUT, "All RAN standards resolve, preserve the shared/local boundary, and execute cleanly through the public WordPress profiles.\n");
+$runPhpcs = static function (string $standard, string $fixture) use ($phpcs): array {
+    $output  = array();
+    $command = escapeshellarg($phpcs) . ' --report=json --standard=' . escapeshellarg($standard) . ' ' . escapeshellarg($fixture) . ' 2>&1';
+    exec($command, $output, $status);
+
+    $report = json_decode(implode("\n", $output), true);
+    if (!is_array($report) || !isset($report['files']) || !is_array($report['files'])) {
+        fwrite(STDERR, "PHPCS did not return a valid JSON report:\n" . implode("\n", $output) . "\n");
+        exit(0 === $status ? 1 : $status);
+    }
+
+    return array($status, $report);
+};
+
+$assertPhpcsPasses = static function (string $standard, string $fixture, string $message) use ($runPhpcs): void {
+    list($status, $report) = $runPhpcs($standard, $fixture);
+    if (0 !== $status) {
+        fwrite(STDERR, $message . ":\n" . json_encode($report, JSON_PRETTY_PRINT) . "\n");
+        exit($status);
+    }
+};
+
+$assertPhpcsReports = static function (string $standard, string $fixture, string $sourcePattern, string $message) use ($runPhpcs): void {
+    list($status, $report) = $runPhpcs($standard, $fixture);
+    if (0 === $status) {
+        fwrite(STDERR, $message . ".\n");
+        exit(1);
+    }
+
+    foreach ($report['files'] as $file) {
+        if (!isset($file['messages']) || !is_array($file['messages'])) {
+            continue;
+        }
+
+        foreach ($file['messages'] as $diagnostic) {
+            if (isset($diagnostic['source']) && 1 === preg_match($sourcePattern, $diagnostic['source'])) {
+                return;
+            }
+        }
+    }
+
+    fwrite(STDERR, $message . ":\n" . json_encode($report, JSON_PRETTY_PRINT) . "\n");
+    exit(1);
+};
+
+$assertPhpcsPasses('RAN', $fixtures['valid'], 'RAN rejected a syntactically valid fixture');
+$assertPhpcsReports('RAN', $fixtures['syntaxInvalid'], '/^Generic\.PHP\.Syntax\./', 'RAN failed to report the syntax error');
+
+foreach (array('pluginRuleset', 'libraryRuleset') as $profileRuleset) {
+    $assertPhpcsPasses($fixtures[$profileRuleset], $fixtures['wordpress'], 'A WordPress profile rejected the clean consumer fixture');
+    $assertPhpcsReports($fixtures[$profileRuleset], $fixtures['compatInvalid'], '/^PHPCompatibility\./', 'PHPCompatibilityWP failed to report syntax outside testVersion');
+    $assertPhpcsReports($fixtures[$profileRuleset], $fixtures['prefixInvalid'], '/^WordPress\.NamingConventions\.PrefixAllGlobals\.NonPrefixedFunctionFound$/', 'The consumer-local prefix rule failed to report a non-prefixed global');
+}
+
+fwrite(STDOUT, "All RAN standards preserve active inheritance and consumer boundaries, and their behavioral fixtures pass.\n");
