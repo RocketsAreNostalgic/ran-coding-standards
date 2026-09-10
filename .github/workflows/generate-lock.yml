@@ -54,7 +54,7 @@ jobs:
         run: |
           set -euo pipefail
           cp generated/composer.lock composer.lock
-          if git diff --quiet -- composer.lock; then
+          if [ -z "$(git status --porcelain -- composer.lock)" ]; then
             exit 0
           fi
           git config user.name 'github-actions[bot]'
