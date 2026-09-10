@@ -120,7 +120,7 @@ $wordpressFixture = <<<'PHP'
  *
  * @return bool
  */
-function ran_shared_profile_fixture() {
+function ran_fixture_shared_profile() {
 	return true;
 }
 PHP;
@@ -139,7 +139,7 @@ $consumerRulesetTemplate = <<<'XML'
     <rule ref="WordPress.NamingConventions.PrefixAllGlobals">
         <properties>
             <property name="prefixes" type="array">
-                <element value="ran"/>
+                <element value="ran_fixture"/>
             </property>
         </properties>
     </rule>
