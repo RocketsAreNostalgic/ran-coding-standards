@@ -25,10 +25,10 @@
         }
     },
     "scripts": {
-        "validate": "composer validate --strict --no-check-publish --no-check-all",
+        "validate:strict": "composer validate --strict --no-check-publish --no-check-all",
         "test": "@php tests/run.php",
         "check": [
-            "@validate",
+            "@validate:strict",
             "@test"
         ]
     }
