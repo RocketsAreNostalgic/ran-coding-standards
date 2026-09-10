@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<ruleset name="RANWordPress">
+    <description>Shared WordPress PHP baseline for RAN projects.</description>
+
+    <rule ref="RAN"/>
+
+    <!-- Consumers must set testVersion to their declared supported PHP range. -->
+    <rule ref="PHPCompatibilityWP"/>
+
+    <rule ref="WordPress-Extra">
+        <!-- RAN PHP uses PSR-4 class filenames; identity/prefix policy remains repository-local. -->
+        <exclude name="WordPress.Files.FileName.NotHyphenatedLowercase"/>
+        <exclude name="WordPress.Files.FileName.InvalidClassFileName"/>
+    </rule>
+</ruleset>
