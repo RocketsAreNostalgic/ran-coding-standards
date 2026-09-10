@@ -18,6 +18,7 @@ $standards = array(
 );
 
 foreach ($standards as $standard) {
+    $output  = array();
     $command = escapeshellarg($phpcs) . ' -e --standard=' . escapeshellarg($standard) . ' 2>&1';
     exec($command, $output, $status);
 
@@ -25,8 +26,6 @@ foreach ($standards as $standard) {
         fwrite(STDERR, sprintf("Standard %s failed to resolve:\n%s\n", $standard, implode("\n", $output)));
         exit($status);
     }
-
-    $output = array();
 }
 
 $tmp = sys_get_temp_dir() . '/ran-coding-standards-' . bin2hex(random_bytes(6));
@@ -37,9 +36,32 @@ if (!mkdir($tmp) && !is_dir($tmp)) {
 
 $valid   = $tmp . '/valid.php';
 $invalid = $tmp . '/invalid.php';
-file_put_contents($valid, "<?php\n\ndeclare(strict_types=1);\n\nfunction ran_fixture(): void {}\n");
-file_put_contents($invalid, "<?php\n\nfunction ran_fixture( {\n");
 
+register_shutdown_function(
+    static function () use ($valid, $invalid, $tmp): void {
+        if (is_file($valid)) {
+            @unlink($valid);
+        }
+        if (is_file($invalid)) {
+            @unlink($invalid);
+        }
+        if (is_dir($tmp)) {
+            @rmdir($tmp);
+        }
+    }
+);
+
+if (false === file_put_contents($valid, "<?php\n\ndeclare(strict_types=1);\n\nfunction ran_fixture(): void {}\n")) {
+    fwrite(STDERR, "Could not write the valid PHPCS fixture.\n");
+    exit(1);
+}
+
+if (false === file_put_contents($invalid, "<?php\n\nfunction ran_fixture( {\n")) {
+    fwrite(STDERR, "Could not write the invalid PHPCS fixture.\n");
+    exit(1);
+}
+
+$output       = array();
 $validCommand = escapeshellarg($phpcs) . ' --standard=RAN ' . escapeshellarg($valid) . ' 2>&1';
 exec($validCommand, $output, $status);
 if (0 !== $status) {
@@ -47,16 +69,12 @@ if (0 !== $status) {
     exit($status);
 }
 
-$output = array();
+$output         = array();
 $invalidCommand = escapeshellarg($phpcs) . ' --standard=RAN ' . escapeshellarg($invalid) . ' 2>&1';
 exec($invalidCommand, $output, $status);
 if (0 === $status) {
     fwrite(STDERR, "RAN failed to reject a syntax-error fixture.\n");
     exit(1);
 }
-
-@unlink($valid);
-@unlink($invalid);
-@rmdir($tmp);
 
 fwrite(STDOUT, "All RAN PHPCS standards resolve and the root syntax gate behaves as expected.\n");
