@@ -42,12 +42,16 @@ $requiredFragments = array(
     'RANWordPressLibrary' => array('<rule ref="RANWordPress"/>'),
 );
 
-$forbiddenPatterns = array(
-    '/<config\b[^>]*\bname\s*=\s*["\']minimum_supported_wp_version["\']/',
-    '/<config\b[^>]*\bname\s*=\s*["\']testVersion["\']/',
-    '/<property\b[^>]*\bname\s*=\s*["\']prefixes["\']/',
-    '/<property\b[^>]*\bname\s*=\s*["\']text_domain["\']/',
+$forbiddenSettingPatterns = array(
+    'PHPCompatibility testVersion'        => '/^testversion$/',
+    'minimum supported WordPress version' => '/^minimum_(?:supported_)?wp_version$/',
+    'prefix property or value'             => '/prefix(?:es)?/',
+    'text-domain property or value'        => '/text_?domains?/',
+    'namespace property'                   => '/namespace/',
+    'product-specific support range'       => '/^(?:(?:php|wp|wordpress)_)?support(?:ed)?_(?:range|versions?)$/',
 );
+
+$repositoryNamespacePattern = '/^(?:RAN|RocketsAreNostalgic)\\\\[A-Za-z_][A-Za-z0-9_\\\\]*$/i';
 
 foreach ($rulesets as $standard => $ruleset) {
     $content = file_get_contents($ruleset);
@@ -63,9 +67,38 @@ foreach ($rulesets as $standard => $ruleset) {
         }
     }
 
-    foreach ($forbiddenPatterns as $pattern) {
-        if (1 === preg_match($pattern, $content)) {
-            fwrite(STDERR, sprintf("%s embeds consumer-specific project configuration.\n", $standard));
+    $document = simplexml_load_string($content, 'SimpleXMLElement', LIBXML_NONET);
+    if (false === $document) {
+        fwrite(STDERR, sprintf("%s is not valid XML.\n", $standard));
+        exit(1);
+    }
+
+    $settingNodes = $document->xpath('//config[@name] | //property[@name]');
+    if (false === $settingNodes) {
+        fwrite(STDERR, sprintf("Could not inspect settings in %s.\n", $standard));
+        exit(1);
+    }
+
+    foreach ($settingNodes as $settingNode) {
+        $settingName = strtolower(str_replace('-', '_', (string) $settingNode['name']));
+
+        foreach ($forbiddenSettingPatterns as $setting => $pattern) {
+            if (1 === preg_match($pattern, $settingName)) {
+                fwrite(STDERR, sprintf("%s embeds consumer-specific %s configuration.\n", $standard, $setting));
+                exit(1);
+            }
+        }
+    }
+
+    $valueNodes = $document->xpath('//config[@value] | //property[@value] | //element[@value]');
+    if (false === $valueNodes) {
+        fwrite(STDERR, sprintf("Could not inspect values in %s.\n", $standard));
+        exit(1);
+    }
+
+    foreach ($valueNodes as $valueNode) {
+        if (1 === preg_match($repositoryNamespacePattern, (string) $valueNode['value'])) {
+            fwrite(STDERR, sprintf("%s embeds a repository-specific namespace identity.\n", $standard));
             exit(1);
         }
     }
@@ -112,16 +145,23 @@ $wordpressFixture = <<<'PHP'
 /**
  * Shared RAN WordPress profile fixture.
  *
- * @package RAN
+ * @package RANFixture
  */
 
+namespace RANFixture;
+
 /**
- * Return a stable fixture value.
- *
- * @return bool
+ * Representative consumer fixture.
  */
-function ran_fixture_shared_profile() {
-	return true;
+final class Example {
+	/**
+	 * Return a stable fixture value.
+	 *
+	 * @return bool
+	 */
+	public function is_ready() {
+		return true;
+	}
 }
 PHP;
 
@@ -133,13 +173,20 @@ if (false === file_put_contents($wordpress, $wordpressFixture . "\n")) {
 $consumerRulesetTemplate = <<<'XML'
 <?xml version="1.0"?>
 <ruleset name="RAN Consumer Fixture">
-    <config name="minimum_supported_wp_version" value="7.0"/>
+    <config name="minimum_wp_version" value="7.0"/>
     <config name="testVersion" value="7.4-8.5"/>
     <rule ref="%s"/>
     <rule ref="WordPress.NamingConventions.PrefixAllGlobals">
         <properties>
             <property name="prefixes" type="array">
-                <element value="ran_fixture"/>
+                <element value="RANFixture"/>
+            </property>
+        </properties>
+    </rule>
+    <rule ref="WordPress.WP.I18n">
+        <properties>
+            <property name="text_domain" type="array">
+                <element value="ran-fixture"/>
             </property>
         </properties>
     </rule>
