@@ -20,7 +20,7 @@ composer install --no-interaction
 composer check
 ```
 
-A standards change should also be proven against at least the RAN Starter and Booster before release to consumers.
+A standards change must not be tagged, published, or otherwise released to consumers until the exact candidate revision has been proven against both RAN Starter and RAN Booster. Attach that exact-head evidence to the release decision; passing this repository's synthetic/package contract alone is not sufficient release evidence.
 
 ## CI
 
