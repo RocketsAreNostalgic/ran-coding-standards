@@ -3,6 +3,5 @@
     <description>Technology-neutral PHP safety baseline for RAN projects.</description>
 
     <!-- Keep this root deliberately small. Product/ecosystem style belongs in child standards. -->
-    <arg name="extensions" value="php"/>
     <rule ref="Generic.PHP.Syntax"/>
 </ruleset>
