@@ -1,0 +1,16 @@
+{
+    "name": "ran/consumer-install-fixture",
+    "description": "Consumer-root installation contract for the shared standards.",
+    "license": "MIT",
+    "require-dev": {
+        "ran/coding-standards": "dev-under-test",
+        "phpcompatibility/php-compatibility": "10.0.0-alpha2",
+        "phpcompatibility/phpcompatibility-paragonie": "2.0.0-alpha2",
+        "phpcompatibility/phpcompatibility-wp": "3.0.0-alpha2"
+    },
+    "config": {
+        "allow-plugins": {
+            "dealerdirect/phpcodesniffer-composer-installer": true
+        }
+    }
+}

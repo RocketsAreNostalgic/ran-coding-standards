@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<ruleset name="RAN">
+    <description>Technology-neutral PHP safety baseline for RAN projects.</description>
+
+    <!-- Keep this root deliberately small. Product/ecosystem style belongs in child standards. -->
+    <rule ref="Generic.PHP.Syntax"/>
+</ruleset>

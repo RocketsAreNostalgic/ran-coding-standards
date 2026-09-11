@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<ruleset name="RANWordPressLibrary">
+    <description>Shared WordPress library PHP baseline for RAN projects.</description>
+    <rule ref="RANWordPress"/>
+</ruleset>
