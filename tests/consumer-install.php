@@ -22,10 +22,10 @@ register_shutdown_function(
         );
 
         foreach ($iterator as $item) {
-            if ($item->isDir()) {
-                @rmdir($item->getPathname());
-            } else {
+            if ($item->isLink() || !$item->isDir()) {
                 @unlink($item->getPathname());
+            } else {
+                @rmdir($item->getPathname());
             }
         }
 
