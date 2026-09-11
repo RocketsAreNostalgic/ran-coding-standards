@@ -52,6 +52,23 @@ $findSelectorViolation = static function ($document, string $standard): ?string 
         }
     }
 
+    $selectorArgNodes = $document->xpath('//arg[@name]');
+    if (false === $selectorArgNodes) {
+        return sprintf("Could not inspect selector arguments in %s.", $standard);
+    }
+
+    $selectorArgNames = array('ignore', 'extensions', 'file-list', 'filter', 'stdin-path');
+    foreach ($selectorArgNodes as $selectorArgNode) {
+        $selectorArgName = strtolower((string) $selectorArgNode['name']);
+        if (in_array($selectorArgName, $selectorArgNames, true)) {
+            return sprintf(
+                "%s embeds a consumer-specific selector argument --%s.",
+                $standard,
+                $selectorArgName
+            );
+        }
+    }
+
     return null;
 };
 
@@ -175,6 +192,21 @@ foreach (array('file', 'include-pattern', 'exclude-pattern') as $selectorName) {
         fwrite(STDERR, sprintf("The package boundary failed to reject an active <%s> selector.\n", $selectorName));
         exit(1);
     }
+}
+
+$selectorArgFixture = simplexml_load_string(
+    '<ruleset name="Selector argument negative"><arg name="ignore" value="*/booster-only/*"/></ruleset>',
+    'SimpleXMLElement',
+    LIBXML_NONET
+);
+if (false === $selectorArgFixture) {
+    fwrite(STDERR, "Could not parse the negative selector-argument fixture.\n");
+    exit(1);
+}
+
+if (null === $findSelectorViolation($selectorArgFixture, 'selector argument negative fixture')) {
+    fwrite(STDERR, "The package boundary failed to reject an active selector-bearing <arg>.\n");
+    exit(1);
 }
 
 $tmp = sys_get_temp_dir() . '/ran-coding-standards-' . bin2hex(random_bytes(6));
