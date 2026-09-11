@@ -36,7 +36,26 @@ $forbiddenSettingPatterns = array(
 $repositoryNamespacePattern = '/^(?:RAN|RocketsAreNostalgic)\\\\[A-Za-z_][A-Za-z0-9_\\\\]*$/i';
 $inspectedRulesets           = array();
 
-$inspectRuleset = static function (string $standard) use (&$inspectRuleset, &$inspectedRulesets, $root, $rulesets, $requiredRules, $forbiddenSettingPatterns, $repositoryNamespacePattern): void {
+$findSelectorViolation = static function ($document, string $standard): ?string {
+    $selectorNodes = $document->xpath('//file | //include-pattern | //exclude-pattern');
+    if (false === $selectorNodes) {
+        return sprintf("Could not inspect file selectors in %s.", $standard);
+    }
+
+    foreach ($selectorNodes as $selectorNode) {
+        if ('' !== trim((string) $selectorNode)) {
+            return sprintf(
+                "%s embeds a consumer-specific <%s> file selector.",
+                $standard,
+                $selectorNode->getName()
+            );
+        }
+    }
+
+    return null;
+};
+
+$inspectRuleset = static function (string $standard) use (&$inspectRuleset, &$inspectedRulesets, $root, $rulesets, $requiredRules, $forbiddenSettingPatterns, $repositoryNamespacePattern, $findSelectorViolation): void {
     $ruleset = $rulesets[$standard] ?? $standard;
     if (isset($inspectedRulesets[$ruleset])) {
         return;
@@ -96,6 +115,12 @@ $inspectRuleset = static function (string $standard) use (&$inspectRuleset, &$in
         }
     }
 
+    $selectorViolation = $findSelectorViolation($document, $standard);
+    if (null !== $selectorViolation) {
+        fwrite(STDERR, $selectorViolation . "\n");
+        exit(1);
+    }
+
     $inspectedRulesets[$ruleset] = true;
 
     foreach ($activeRules as $activeRule) {
@@ -133,6 +158,23 @@ foreach (array_keys($rulesets) as $standard) {
     }
 
     $inspectRuleset($standard);
+}
+
+foreach (array('file', 'include-pattern', 'exclude-pattern') as $selectorName) {
+    $selectorFixture = simplexml_load_string(
+        sprintf('<ruleset name="Selector negative"><%1$s>booster-only/</%1$s></ruleset>', $selectorName),
+        'SimpleXMLElement',
+        LIBXML_NONET
+    );
+    if (false === $selectorFixture) {
+        fwrite(STDERR, sprintf("Could not parse the %s negative selector fixture.\n", $selectorName));
+        exit(1);
+    }
+
+    if (null === $findSelectorViolation($selectorFixture, 'selector negative fixture')) {
+        fwrite(STDERR, sprintf("The package boundary failed to reject an active <%s> selector.\n", $selectorName));
+        exit(1);
+    }
 }
 
 $tmp = sys_get_temp_dir() . '/ran-coding-standards-' . bin2hex(random_bytes(6));
