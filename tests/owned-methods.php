@@ -14,6 +14,8 @@ class Implementation extends ParentType implements Contract {
     public function is_ready() {}
     private function internal_helper() {}
     private function ä_helper() {}
+    private function 处理_项目2() {}
+    private function café_helper() {}
     public function __toString() { return ''; }
     public function __debugInfo() { return array(); }
     public static function __callStatic($name, $arguments) {}
@@ -121,3 +123,9 @@ foreach (array('RAN', 'RANWordPress', 'RANWordPressPlugin', 'RANWordPressLibrary
 }
 
 fwrite(STDOUT, "Opt-in owned-method checks cover inherited, implementing, trait, anonymous and enum scopes without broad signature exemptions.\n");
+
+// PHP accepts arbitrary high bytes: the naming policy must reject deceptive names.
+foreach (array("Ⅰ", "Ⓐ", "safe\u{202E}evil", "safe😀", "safe\u{200B}name", "safe·name", "safe\xFFname") as $invalid_name) {
+    list($owned_status, $owned_messages) = $owned_run('<?php class BadName { public function ' . $invalid_name . '() {} }');
+    $owned_assert(1 === $owned_status && 1 === count($owned_messages) && $owned_source . '.NotSnakeCase' === $owned_messages[0]['source'], 'A nonconforming Unicode/byte identifier escaped the check.');
+}

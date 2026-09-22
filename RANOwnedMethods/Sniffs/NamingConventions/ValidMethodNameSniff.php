@@ -43,16 +43,19 @@ final class ValidMethodNameSniff implements Sniff {
 			return;
 		}
 
-		// Unicode properties keep enforcement independent of optional mbstring.
+		// Permit lowercase or uncased letters, marks, ASCII digits and underscores.
+		// A complete allowlist excludes uppercase, symbols and invisible controls.
 		// Invalid UTF-8 identifiers fail closed instead of bypassing the check.
-		$uppercase = preg_match( '/[\p{Lu}\p{Lt}]/u', $name );
+		$valid_name = preg_match( '/\A[_\p{Ll}\p{Lo}][_\p{Ll}\p{Lo}\p{Mn}\p{Mc}0-9]*\z/u', $name );
 
-		if ( 0 !== $uppercase ) {
+		$display_name = false === $valid_name ? '0x' . bin2hex( $name ) : $name;
+
+		if ( 1 !== $valid_name ) {
 			$phpcs_file->addError(
 				'Owned method "%s" must use snake_case; inheritance does not exempt owned declarations.',
 				$stack_ptr,
 				'NotSnakeCase',
-				array( $name )
+				array( $display_name )
 			);
 		}
 
@@ -61,7 +64,7 @@ final class ValidMethodNameSniff implements Sniff {
 				'Owned method "%s" uses a double-underscore prefix reserved for PHP magic methods.',
 				$stack_ptr,
 				'ReservedPrefix',
-				array( $name )
+				array( $display_name )
 			);
 		}
 	}
