@@ -10,6 +10,7 @@ The package implements the PHP portion of the RAN organisation quality policy. I
 - `RANWordPress` — WPCS + PHPCompatibilityWP baseline for maintained WordPress PHP.
 - `RANWordPressPlugin` — WordPress plugin profile.
 - `RANWordPressLibrary` — WordPress library profile.
+- `RANOwnedMethods` — opt-in additional method-name enforcement for selected first-party code, including inherited classes. Use alongside a WordPress profile, not instead of one.
 
 The plugin and library profiles intentionally begin as thin named profiles over `RANWordPress`. Separate names allow future divergence to be explicit and versioned rather than inferred from consumer exceptions.
 
@@ -72,6 +73,52 @@ Example:
     </rule>
 </ruleset>
 ```
+
+## Staged owned-method enforcement
+
+WPCS 3.4.1 skips method-name checks for classes that extend another class or
+implement an interface. That also skips unrelated private methods owned by the
+project. `RANOwnedMethods` closes this gap for the first-party source selected by
+the consumer. It checks declarations in classes, interfaces, traits, anonymous
+classes and enums, regardless of inheritance or deprecation annotations. PHP
+magic methods remain valid. Global functions and calls are outside this additive
+check; the ordinary WordPress profile remains responsible for its other rules.
+
+None of the four existing profiles enables this check implicitly. Once an owned
+scope is migrated and its callers are qualified, opt in explicitly:
+
+```xml
+<rule ref="RANWordPressLibrary"/>
+<rule ref="RANOwnedMethods"/>
+```
+
+Use the same consumer ruleset and paths for PHPCS and PHPCBF. These errors are
+blocking even with `-n` and are deliberately not autofixable: a declaration-only
+rename cannot safely update callers, named arguments or dynamic references.
+Standalone methods may also receive the equivalent WPCS diagnostic; this check
+supplements, rather than disables, upstream enforcement.
+
+The check does not load application classes or infer which methods implement
+third-party contracts. A demonstrated external signature needs a narrow local
+exception, for example:
+
+```php
+// phpcs:ignore RANOwnedMethods.NamingConventions.ValidMethodName.NotSnakeCase -- PHPUnit lifecycle signature.
+protected function setUp(): void {}
+```
+
+That exception does not exempt other methods in the class. Do not globally allow
+names such as `setUp`, exempt every derived class, or preserve owned camelCase
+methods simply by marking them deprecated. Keep vendor/generated selection and
+real external-contract exceptions in the consumer. Any transitional exclusion
+must identify its scope, reason, owning issue and removal slice.
+
+The rollout is owned by
+[the existing quality programme](https://github.com/RocketsAreNostalgic/.github/issues/65#rollout-plan-and-agent-handoffs).
+Prepare candidate tooling independently; consumer activation and lock updates
+follow each release lane's recorded handoff. This opt-in delivery is migration
+staging, not an approved permanent naming exemption. The package's exact
+Starter/Core proof and release-authorization requirements still apply.
 
 ## Version policy
 

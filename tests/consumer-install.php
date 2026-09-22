@@ -100,4 +100,30 @@ foreach (array('phpcompatibility/php-compatibility', 'phpcompatibility/phpcompat
     }
 }
 
-fwrite(STDOUT, "A stable consumer root installs the package with root-owned plugin permission and without development-only alpha dependencies.\n");
+// Prove the opt-in sniff is registered and runnable from the installed package,
+// even when the consumer does not install this repository's dev dependencies.
+$owned_fixture = $tmp . '/owned-methods.php';
+if (false === file_put_contents($owned_fixture, '<?php class OwnedExample extends \\RuntimeException { private function ownedCamelCase() {} }')) {
+    fwrite(STDERR, "Could not write the installed owned-method fixture.\n");
+    exit(1);
+}
+$output = array();
+exec(
+    escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($tmp . '/vendor/bin/phpcs')
+    . ' -n --standard=RANOwnedMethods --report=json ' . escapeshellarg($owned_fixture) . ' 2>&1',
+    $output,
+    $status
+);
+$owned_report = json_decode(implode("\n", $output), true);
+$owned_messages = array();
+foreach ($owned_report['files'] ?? array() as $owned_file) {
+    $owned_messages = array_merge($owned_messages, $owned_file['messages']);
+}
+if (1 !== $status || 1 !== count($owned_messages)
+    || 'RANOwnedMethods.NamingConventions.ValidMethodName.NotSnakeCase' !== $owned_messages[0]['source']
+) {
+    fwrite(STDERR, "Installed owned-method enforcement failed:\n" . implode("\n", $output) . "\n");
+    exit(1);
+}
+
+fwrite(STDOUT, "A stable consumer root installs and runs the opt-in owned-method check without development-only alpha dependencies.\n");

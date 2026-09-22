@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<ruleset name="RANOwnedMethods">
+    <description>Explicitly selected naming checks for first-party methods, including inherited classes.</description>
+    <rule ref="RANOwnedMethods.NamingConventions.ValidMethodName"/>
+</ruleset>
