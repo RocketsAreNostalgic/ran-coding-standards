@@ -141,7 +141,10 @@ composer check
 
 CI also installs `tests/consumer.json` as a fresh WordPress consumer root, without a lockfile or inherited Composer home. This tests the documented root-level alpha requirements and plugin permission against an archive of the exact checked-out revision, then verifies registration of all four standards. Its `dev-under-test` version and path repository are test-only, not release configuration.
 
-Owned-method identifiers permit lowercase or uncased Unicode letters, combining
-marks after the first character, ASCII digits after the first character, and
-underscores. Uppercase/titlecase letters, symbols, punctuation, invisible format
-characters and invalid UTF-8 are rejected without requiring mbstring.
+Owned-method identifiers use the explicit ASCII pattern `[_a-z][_a-z0-9]*`.
+This opt-in RAN policy is independent of Unicode database and mbstring versions;
+it is not a claim that upstream WPCS requires ASCII-only identifiers. Non-ASCII
+and malformed byte identifiers are rejected, with their bytes rendered as hex
+in diagnostics. Safe ASCII identifiers remain readable in diagnostics. Genuine
+PHP magic methods retain their exemption; other double-underscore prefixes
+remain reserved.

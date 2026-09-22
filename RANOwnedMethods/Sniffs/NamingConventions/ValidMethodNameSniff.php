@@ -43,16 +43,15 @@ final class ValidMethodNameSniff implements Sniff {
 			return;
 		}
 
-		// Permit lowercase or uncased letters, marks, ASCII digits and underscores.
-		// A complete allowlist excludes uppercase, symbols and invisible controls.
-		// Invalid UTF-8 identifiers fail closed instead of bypassing the check.
-		$valid_name = preg_match( '/\A[_\p{Ll}\p{Lo}][_\p{Ll}\p{Lo}\p{Mn}\p{Mc}0-9]*\z/u', $name );
+		// Explicit ASCII policy is independent of Unicode database and mbstring versions.
+		$valid_name = preg_match( '/\A[_a-z][_a-z0-9]*\z/', $name );
 
-		$display_name = false === $valid_name ? '0x' . bin2hex( $name ) : $name;
+		// Render non-ASCII bytes safely in both text and JSON reports.
+		$display_name = 1 === preg_match( '/\A[_a-zA-Z0-9]+\z/', $name ) ? $name : '0x' . bin2hex( $name );
 
 		if ( 1 !== $valid_name ) {
 			$phpcs_file->addError(
-				'Owned method "%s" must use snake_case; inheritance does not exempt owned declarations.',
+				'Owned method "%s" must use ASCII snake_case; inheritance does not exempt owned declarations.',
 				$stack_ptr,
 				'NotSnakeCase',
 				array( $display_name )

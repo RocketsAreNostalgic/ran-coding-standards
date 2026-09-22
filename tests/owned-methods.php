@@ -13,9 +13,7 @@ class ParentType { public function is_ready() {} }
 class Implementation extends ParentType implements Contract {
     public function is_ready() {}
     private function internal_helper() {}
-    private function ä_helper() {}
-    private function 处理_项目2() {}
-    private function café_helper() {}
+    private function _helper2() {}
     public function __toString() { return ''; }
     public function __debugInfo() { return array(); }
     public static function __callStatic($name, $arguments) {}
@@ -42,7 +40,7 @@ $owned_assert = static function (bool $condition, string $message): void {
 
 $owned_run = static function (string $contents, array $arguments = array()) use ($phpcs, $owned_file, $owned_assert): array {
     $owned_assert(false !== file_put_contents($owned_file, $contents . "\n"), 'Could not write owned-method fixture.');
-    // Explicitly prove Unicode checks without the optional mbstring helper.
+    // Prove the policy without the optional mbstring helper.
     $command = escapeshellarg(PHP_BINARY) . ' -d disable_functions=mb_strtolower ' . escapeshellarg($phpcs)
         . ' -n --report=json --standard=RANOwnedMethods';
     foreach ($arguments as $argument) {
@@ -90,7 +88,7 @@ class OtherTest extends \PHPUnit\Framework\TestCase {
 PHP;
 
 list($owned_status, $owned_messages) = $owned_run($owned_fixture . "\n" . $owned_bad);
-$owned_expected = array('contractName', 'childContractName', 'unrelatedCamelCase', 'fromFailure', 'traitName', 'anonymousName', 'ordinaryName', 'deprecatedName', '__owned_name', '___owned_helper', 'Ä', 'ǅ', 'setUp');
+$owned_expected = array('contractName', 'childContractName', 'unrelatedCamelCase', 'fromFailure', 'traitName', 'anonymousName', 'ordinaryName', 'deprecatedName', '__owned_name', '___owned_helper', '0xc384', '0xc785', 'setUp');
 $owned_assert(1 === $owned_status && count($owned_expected) === count($owned_messages), 'Owned declarations were missed or unrelated declarations were reported: ' . json_encode($owned_messages));
 foreach ($owned_expected as $owned_index => $owned_name) {
     $message = $owned_messages[$owned_index];
@@ -125,7 +123,8 @@ foreach (array('RAN', 'RANWordPress', 'RANWordPressPlugin', 'RANWordPressLibrary
 fwrite(STDOUT, "Opt-in owned-method checks cover inherited, implementing, trait, anonymous and enum scopes without broad signature exemptions.\n");
 
 // PHP accepts arbitrary high bytes: the naming policy must reject deceptive names.
-foreach (array("Ⅰ", "Ⓐ", "safe\u{202E}evil", "safe😀", "safe\u{200B}name", "safe·name", "safe\xFFname") as $invalid_name) {
+foreach (array("ä_helper", "处理_项目2", "cafe\u{0301}_helper", "safe\u{034F}name", "safe\u{FE0F}name", "\u{1E4D0}", "Ⅰ", "Ⓐ", "safe\u{202E}evil", "safe😀", "safe\u{200B}name", "safe·name", "safe\xFFname") as $invalid_name) {
     list($owned_status, $owned_messages) = $owned_run('<?php class BadName { public function ' . $invalid_name . '() {} }');
     $owned_assert(1 === $owned_status && 1 === count($owned_messages) && $owned_source . '.NotSnakeCase' === $owned_messages[0]['source'], 'A nonconforming Unicode/byte identifier escaped the check.');
+    $owned_assert(false !== strpos($owned_messages[0]['message'], '"0x' . bin2hex($invalid_name) . '"') && 1 === preg_match('/\A[\x20-\x7e]*\z/', $owned_messages[0]['message']), 'Rejected identifier was not rendered as safe ASCII hex.');
 }
