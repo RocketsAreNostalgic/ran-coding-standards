@@ -43,13 +43,11 @@ final class ValidMethodNameSniff implements Sniff {
 			return;
 		}
 
-		// Match WPCS's lowercase convention without depending on its internal helper.
-		$lowercase = strtolower( $name );
-		if ( function_exists( 'mb_strtolower' ) ) {
-			$lowercase = mb_strtolower( $name, $phpcs_file->config->encoding );
-		}
+		// Unicode properties keep enforcement independent of optional mbstring.
+		// Invalid UTF-8 identifiers fail closed instead of bypassing the check.
+		$uppercase = preg_match( '/[\p{Lu}\p{Lt}]/u', $name );
 
-		if ( $name !== $lowercase ) {
+		if ( 0 !== $uppercase ) {
 			$phpcs_file->addError(
 				'Owned method "%s" must use snake_case; inheritance does not exempt owned declarations.',
 				$stack_ptr,
@@ -58,7 +56,7 @@ final class ValidMethodNameSniff implements Sniff {
 			);
 		}
 
-		if ( 1 === preg_match( '/^__[^_]/', $name ) ) {
+		if ( 1 === preg_match( '/^__/', $name ) ) {
 			$phpcs_file->addError(
 				'Owned method "%s" uses a double-underscore prefix reserved for PHP magic methods.',
 				$stack_ptr,

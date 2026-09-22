@@ -218,6 +218,7 @@ if (!mkdir($tmp) && !is_dir($tmp)) {
 }
 
 $fixtures = array(
+    'alignment'     => $tmp . '/alignment.php',
     'valid'         => $tmp . '/valid.php',
     'syntaxInvalid' => $tmp . '/syntax-invalid.php',
     'wordpress'     => $tmp . '/ran-shared-profile-fixture.php',
@@ -242,6 +243,31 @@ register_shutdown_function(
 );
 
 $fixtureContents = array(
+    'alignment' => <<<'PHP'
+<?php
+/**
+ * Alignment fixture.
+ *
+ * @package RANFixture
+ */
+
+namespace RANFixture;
+
+/**
+ * Return aligned values.
+ *
+ * @return array
+ */
+function alignment_fixture() {
+	$short = 1;
+	$longer = 2;
+
+	return array(
+		'short' => $short,
+		'longer' => $longer,
+	);
+}
+PHP,
     'valid' => "<?php\n\ndeclare(strict_types=1);\n\nfunction ran_fixture(): void {}\n",
     'syntaxInvalid' => "<?php\n\nfunction ran_fixture( {\n",
     'wordpress' => <<<'PHP'
@@ -331,9 +357,9 @@ foreach (array('pluginRuleset' => 'RANWordPressPlugin', 'libraryRuleset' => 'RAN
     }
 }
 
-$runPhpcs = static function (string $standard, string $fixture) use ($phpcs): array {
+$runPhpcs = static function (string $standard, string $fixture, bool $hideWarnings = false) use ($phpcs): array {
     $output  = array();
-    $command = escapeshellarg($phpcs) . ' --report=json --standard=' . escapeshellarg($standard) . ' ' . escapeshellarg($fixture) . ' 2>&1';
+    $command = escapeshellarg($phpcs) . ($hideWarnings ? ' -n' : '') . ' --report=json --standard=' . escapeshellarg($standard) . ' ' . escapeshellarg($fixture) . ' 2>&1';
     exec($command, $output, $status);
 
     $report = json_decode(implode("\n", $output), true);
@@ -380,6 +406,42 @@ $assertPhpcsPasses('RAN', $fixtures['valid'], 'RAN rejected a syntactically vali
 $assertPhpcsReports('RAN', $fixtures['syntaxInvalid'], '/^Generic\.PHP\.Syntax\./', 'RAN failed to report the syntax error');
 
 foreach (array('pluginRuleset', 'libraryRuleset') as $profileRuleset) {
+    // Exercise the same ruleset with warnings hidden, then prove PHPCBF convergence.
+    if (false === file_put_contents($fixtures['alignment'], $fixtureContents['alignment'] . "\n")) {
+        fwrite(STDERR, "Could not reset the alignment fixture.\n");
+        exit(1);
+    }
+    list($status, $report) = $runPhpcs($fixtures[$profileRuleset], $fixtures['alignment'], true);
+    $alignmentSources = array();
+    foreach ($report['files'] as $file) {
+        foreach ($file['messages'] as $diagnostic) {
+            if ('ERROR' === $diagnostic['type'] && $diagnostic['fixable']) {
+                $alignmentSources[] = $diagnostic['source'];
+            }
+        }
+    }
+    foreach (array('Generic.Formatting.MultipleStatementAlignment', 'WordPress.Arrays.MultipleStatementAlignment') as $source) {
+        if (0 === $status || !preg_grep('/^' . preg_quote($source, '/') . '\./', $alignmentSources)) {
+            fwrite(STDERR, "Alignment did not remain a fixable error with -n: " . $source . "\n" . json_encode($report, JSON_PRETTY_PRINT) . "\n");
+            exit(1);
+        }
+    }
+    $fixCommand = escapeshellarg($root . '/vendor/bin/phpcbf') . ' -n --standard='
+        . escapeshellarg($fixtures[$profileRuleset]) . ' ' . escapeshellarg($fixtures['alignment']) . ' 2>&1';
+    $output = array();
+    exec($fixCommand, $output, $status);
+    if (1 !== $status) {
+        fwrite(STDERR, "PHPCBF failed to fix alignment:\n" . implode("\n", $output) . "\n");
+        exit(1);
+    }
+    $assertPhpcsPasses($fixtures[$profileRuleset], $fixtures['alignment'], 'PHPCBF left the alignment fixture unclean');
+    $fixedHash = hash_file('sha256', $fixtures['alignment']);
+    $output = array();
+    exec($fixCommand, $output, $status);
+    if (0 !== $status || $fixedHash !== hash_file('sha256', $fixtures['alignment'])) {
+        fwrite(STDERR, "A second PHPCBF pass was not stable.\n");
+        exit(1);
+    }
     $assertPhpcsPasses($fixtures[$profileRuleset], $fixtures['wordpress'], 'A WordPress profile rejected the clean consumer fixture');
     $assertPhpcsReports($fixtures[$profileRuleset], $fixtures['compatInvalid'], '/^PHPCompatibility\./', 'PHPCompatibilityWP failed to report syntax outside testVersion');
     $assertPhpcsReports($fixtures[$profileRuleset], $fixtures['prefixInvalid'], '/^WordPress\.NamingConventions\.PrefixAllGlobals\.NonPrefixedFunctionFound$/', 'The consumer-local prefix rule failed to report a non-prefixed global');

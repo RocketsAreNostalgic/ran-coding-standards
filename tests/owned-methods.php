@@ -13,6 +13,7 @@ class ParentType { public function is_ready() {} }
 class Implementation extends ParentType implements Contract {
     public function is_ready() {}
     private function internal_helper() {}
+    private function ä_helper() {}
     public function __toString() { return ''; }
     public function __debugInfo() { return array(); }
     public static function __callStatic($name, $arguments) {}
@@ -39,7 +40,8 @@ $owned_assert = static function (bool $condition, string $message): void {
 
 $owned_run = static function (string $contents, array $arguments = array()) use ($phpcs, $owned_file, $owned_assert): array {
     $owned_assert(false !== file_put_contents($owned_file, $contents . "\n"), 'Could not write owned-method fixture.');
-    $command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($phpcs)
+    // Explicitly prove Unicode checks without the optional mbstring helper.
+    $command = escapeshellarg(PHP_BINARY) . ' -d disable_functions=mb_strtolower ' . escapeshellarg($phpcs)
         . ' -n --report=json --standard=RANOwnedMethods';
     foreach ($arguments as $argument) {
         $command .= ' ' . escapeshellarg($argument);
@@ -76,6 +78,9 @@ class OwnedPlain {
     /** @deprecated Historical naming is not an external contract. */
     public function deprecatedName() {}
     public function __owned_name() {}
+    public function ___owned_helper() {}
+    public function Ä() {}
+    public function ǅ() {}
 }
 class OtherTest extends \PHPUnit\Framework\TestCase {
     protected function setUp(): void {}
@@ -83,11 +88,11 @@ class OtherTest extends \PHPUnit\Framework\TestCase {
 PHP;
 
 list($owned_status, $owned_messages) = $owned_run($owned_fixture . "\n" . $owned_bad);
-$owned_expected = array('contractName', 'childContractName', 'unrelatedCamelCase', 'fromFailure', 'traitName', 'anonymousName', 'ordinaryName', 'deprecatedName', '__owned_name', 'setUp');
+$owned_expected = array('contractName', 'childContractName', 'unrelatedCamelCase', 'fromFailure', 'traitName', 'anonymousName', 'ordinaryName', 'deprecatedName', '__owned_name', '___owned_helper', 'Ä', 'ǅ', 'setUp');
 $owned_assert(1 === $owned_status && count($owned_expected) === count($owned_messages), 'Owned declarations were missed or unrelated declarations were reported: ' . json_encode($owned_messages));
 foreach ($owned_expected as $owned_index => $owned_name) {
     $message = $owned_messages[$owned_index];
-    $code = '__owned_name' === $owned_name ? 'ReservedPrefix' : 'NotSnakeCase';
+    $code = 0 === strpos($owned_name, '__') ? 'ReservedPrefix' : 'NotSnakeCase';
     $owned_assert(
         $owned_source . '.' . $code === $message['source']
         && false !== strpos($message['message'], '"' . $owned_name . '"')
