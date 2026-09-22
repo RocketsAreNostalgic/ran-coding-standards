@@ -15,6 +15,7 @@ $rulesets = array(
     'RANWordPress'        => $root . '/RANWordPress/ruleset.xml',
     'RANWordPressPlugin'  => $root . '/RANWordPressPlugin/ruleset.xml',
     'RANWordPressLibrary' => $root . '/RANWordPressLibrary/ruleset.xml',
+    'RANOwnedMethods'     => $root . '/RANOwnedMethods/ruleset.xml',
 );
 
 $requiredRules = array(
@@ -22,6 +23,7 @@ $requiredRules = array(
     'RANWordPress'        => array('RAN', 'PHPCompatibilityWP', 'WordPress-Extra'),
     'RANWordPressPlugin'  => array('RANWordPress'),
     'RANWordPressLibrary' => array('RANWordPress'),
+    'RANOwnedMethods'     => array('RANOwnedMethods.NamingConventions.ValidMethodName'),
 );
 
 $forbiddenSettingPatterns = array(
@@ -224,6 +226,7 @@ $fixtures = array(
     'prefixInvalid' => $tmp . '/prefix-invalid.php',
     'pluginRuleset' => $tmp . '/plugin-ruleset.xml',
     'libraryRuleset'=> $tmp . '/library-ruleset.xml',
+    'ownedMethods'  => $tmp . '/owned-methods.php',
 );
 
 register_shutdown_function(
@@ -443,5 +446,7 @@ foreach (array('pluginRuleset', 'libraryRuleset') as $profileRuleset) {
     $assertPhpcsReports($fixtures[$profileRuleset], $fixtures['compatInvalid'], '/^PHPCompatibility\./', 'PHPCompatibilityWP failed to report syntax outside testVersion');
     $assertPhpcsReports($fixtures[$profileRuleset], $fixtures['prefixInvalid'], '/^WordPress\.NamingConventions\.PrefixAllGlobals\.NonPrefixedFunctionFound$/', 'The consumer-local prefix rule failed to report a non-prefixed global');
 }
+
+require __DIR__ . '/owned-methods.php';
 
 fwrite(STDOUT, "All RAN standards preserve active inheritance and consumer boundaries, and their behavioral fixtures pass.\n");

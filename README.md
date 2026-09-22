@@ -10,6 +10,7 @@ The package implements the PHP portion of the RAN organisation quality policy. I
 - `RANWordPress` — WPCS + PHPCompatibilityWP baseline for maintained WordPress PHP.
 - `RANWordPressPlugin` — WordPress plugin profile.
 - `RANWordPressLibrary` — WordPress library profile.
+- `RANOwnedMethods` — opt-in additional method-name enforcement for selected first-party code, including inherited classes. Use alongside a WordPress profile, not instead of one.
 
 The plugin and library profiles intentionally begin as thin named profiles over `RANWordPress`. Separate names allow future divergence to be explicit and versioned rather than inferred from consumer exceptions.
 
@@ -75,6 +76,52 @@ Example:
 </ruleset>
 ```
 
+## Staged owned-method enforcement
+
+WPCS 3.4.1 skips method-name checks for classes that extend another class or
+implement an interface. That also skips unrelated private methods owned by the
+project. `RANOwnedMethods` closes this gap for the first-party source selected by
+the consumer. It checks declarations in classes, interfaces, traits, anonymous
+classes and enums, regardless of inheritance or deprecation annotations. PHP
+magic methods remain valid. Global functions and calls are outside this additive
+check; the ordinary WordPress profile remains responsible for its other rules.
+
+None of the four existing profiles enables this check implicitly. Once an owned
+scope is migrated and its callers are qualified, opt in explicitly:
+
+```xml
+<rule ref="RANWordPressLibrary"/>
+<rule ref="RANOwnedMethods"/>
+```
+
+Use the same consumer ruleset and paths for PHPCS and PHPCBF. These errors are
+blocking even with `-n` and are deliberately not autofixable: a declaration-only
+rename cannot safely update callers, named arguments or dynamic references.
+Standalone methods may also receive the equivalent WPCS diagnostic; this check
+supplements, rather than disables, upstream enforcement.
+
+The check does not load application classes or infer which methods implement
+third-party contracts. A demonstrated external signature needs a narrow local
+exception, for example:
+
+```php
+// phpcs:ignore RANOwnedMethods.NamingConventions.ValidMethodName.NotSnakeCase -- PHPUnit lifecycle signature.
+protected function setUp(): void {}
+```
+
+That exception does not exempt other methods in the class. Do not globally allow
+names such as `setUp`, exempt every derived class, or preserve owned camelCase
+methods simply by marking them deprecated. Keep vendor/generated selection and
+real external-contract exceptions in the consumer. Any transitional exclusion
+must identify its scope, reason, owning issue and removal slice.
+
+The rollout is owned by
+[the existing quality programme](https://github.com/RocketsAreNostalgic/.github/issues/65#rollout-plan-and-agent-handoffs).
+Prepare candidate tooling independently; consumer activation and lock updates
+follow each release lane's recorded handoff. This opt-in delivery is migration
+staging, not an approved permanent naming exemption. The package's exact
+RAN Starter/RAN Booster proof and release-authorization requirements still apply.
+
 ## Version policy
 
 WPCS 3.4.1 currently requires PHP_CodeSniffer 3.x, so the initial package stays on PHPCS `^3.13.6`. A PHPCS 4 migration should be a deliberate package major/minor change once the WordPress standards stack supports it cleanly.
@@ -93,3 +140,11 @@ composer check
 `composer check` performs strict Composer validation, proves stable-root consumer installation without transitive alpha dependencies, verifies every exported PHPCS standard resolves with active inheritance and no consumer configuration (including repository-owned referenced XML rulesets), and runs positive and negative behavioral fixtures through both public WordPress profiles.
 
 CI also installs `tests/consumer.json` as a fresh WordPress consumer root, without a lockfile or inherited Composer home. This tests the documented root-level alpha requirements and plugin permission against an archive of the exact checked-out revision, then verifies registration of all four standards. Its `dev-under-test` version and path repository are test-only, not release configuration.
+
+Owned-method identifiers use the explicit ASCII pattern `[_a-z][_a-z0-9]*`.
+This opt-in RAN policy is independent of Unicode database and mbstring versions;
+it is not a claim that upstream WPCS requires ASCII-only identifiers. Non-ASCII
+and malformed byte identifiers are rejected, with their bytes rendered as hex
+in diagnostics. Safe ASCII identifiers remain readable in diagnostics. Genuine
+PHP magic methods retain their exemption; other double-underscore prefixes
+remain reserved.
