@@ -13,6 +13,8 @@ The package implements the PHP portion of the RAN organisation quality policy. I
 
 The plugin and library profiles intentionally begin as thin named profiles over `RANWordPress`. Separate names allow future divergence to be explicit and versioned rather than inferred from consumer exceptions.
 
+PHPCS is the authoritative PHP style check; PHPCBF applies fixes using the same consumer ruleset and file scope. Both WordPress profiles report assignment and array alignment violations as errors, so hiding warnings with `-n` cannot silently disable those formatting checks. Consumers do not need a second PHP formatter for this guarantee.
+
 ## Consumer installation
 
 A consumer can install the package from a root that keeps Composer's default stable minimum:

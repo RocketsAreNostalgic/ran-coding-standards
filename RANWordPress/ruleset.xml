@@ -12,4 +12,13 @@
         <exclude name="WordPress.Files.FileName.NotHyphenatedLowercase"/>
         <exclude name="WordPress.Files.FileName.InvalidClassFileName"/>
     </rule>
+    <!-- Formatting failures must remain blocking when consumers hide warnings with -n. -->
+    <rule ref="Generic.Formatting.MultipleStatementAlignment">
+        <properties>
+            <property name="error" value="true"/>
+        </properties>
+    </rule>
+    <rule ref="WordPress.Arrays.MultipleStatementAlignment">
+        <type>error</type>
+    </rule>
 </ruleset>
