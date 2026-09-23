@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "b984a0e47d73be5e45ceab566c42aa803550497c",
+  "release-type": "php",
+  "include-v-in-tag": true,
+  "include-component-in-tag": false,
+  "packages": {
+    ".": {
+      "package-name": "ran/coding-standards",
+      "changelog-path": "CHANGELOG.md",
+      "initial-version": "1.0.0"
+    }
+  }
+}

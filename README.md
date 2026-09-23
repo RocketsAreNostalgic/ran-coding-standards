@@ -148,3 +148,9 @@ and malformed byte identifiers are rejected, with their bytes rendered as hex
 in diagnostics. Safe ASCII identifiers remain readable in diagnostics. Genuine
 PHP magic methods retain their exemption; other double-underscore prefixes
 remain reserved.
+
+## Releases
+
+Release Please manages releases through the shared Profile A workflow. See
+[RELEASING.md](RELEASING.md) for the first-release configuration and required
+Starter/Booster qualification before publication.
