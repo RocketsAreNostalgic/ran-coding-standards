@@ -11,6 +11,8 @@
         <!-- RAN PHP uses PSR-4 class filenames; identity/prefix policy remains repository-local. -->
         <exclude name="WordPress.Files.FileName.NotHyphenatedLowercase"/>
         <exclude name="WordPress.Files.FileName.InvalidClassFileName"/>
+        <!-- Throwable payloads are diagnostic data; escape them at the actual rendering boundary. -->
+        <exclude name="WordPress.Security.EscapeOutput.ExceptionNotEscaped"/>
     </rule>
     <!-- Formatting failures must remain blocking when consumers hide warnings with -n. -->
     <rule ref="Generic.Formatting.MultipleStatementAlignment">
