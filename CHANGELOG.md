@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/RocketsAreNostalgic/ran-coding-standards/compare/v1.0.0...v1.0.1) (2026-10-03)
+
+
+### Bug Fixes
+
+* align shared exception policy and document PHP applicability ([#9](https://github.com/RocketsAreNostalgic/ran-coding-standards/issues/9)) ([c03310d](https://github.com/RocketsAreNostalgic/ran-coding-standards/commit/c03310d368a59df4bcb5935e8e240ee0ba007573))
+
 ## 1.0.0 (2026-09-23)
 
 
