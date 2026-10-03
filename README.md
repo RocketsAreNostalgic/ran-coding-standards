@@ -16,6 +16,61 @@ The plugin and library profiles intentionally begin as thin named profiles over 
 
 PHPCS is the authoritative PHP style check; PHPCBF applies fixes using the same consumer ruleset and file scope. Both WordPress profiles report assignment and array alignment violations as errors, so hiding warnings with `-n` cannot silently disable those formatting checks. Consumers do not need a second PHP formatter for this guarantee.
 
+## Effective policy and applicability
+
+The [organisation quality policy](https://github.com/RocketsAreNostalgic/.github/blob/3d355edac056effd4a08a51f6e13e2ec05e80ebb/QUALITY_STANDARDS.md#next-beta-booster-php-acceptance)
+defines the next-beta Booster acceptance boundary. The existing profiles express
+that policy; code-surface differences do not require new public standards.
+`RANWordPress` imports `WordPress-Extra`, which includes `WordPress-Core`, plus
+PHP syntax and WordPress-aware compatibility checks. It does not import optional
+`WordPress-Docs`. Accurate public contracts and useful type information remain
+required; stronger documentation checks adopted by a consumer remain in force.
+
+The shared deviations from WordPress-Extra are:
+
+| Rule | Shared decision |
+| --- | --- |
+| `WordPress.Files.FileName.NotHyphenatedLowercase` and `InvalidClassFileName` | Excluded to retain Composer/PSR-4 class filenames. |
+| `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | Excluded: a Throwable payload is diagnostic data, not HTML output. Preserve the payload and escape when it is rendered. |
+| `Generic.Formatting.MultipleStatementAlignment` and `WordPress.Arrays.MultipleStatementAlignment` | Alignment violations are errors, including when warnings are hidden. |
+
+The exception-message decision does not exempt `echo`, `print` or other actual
+output from escaping checks, and does not certify an application's exception
+handler. Consumers must verify their rendering boundaries and avoid exposing
+private diagnostics, including uncaught exceptions through `display_errors` or
+debug output. Existing local exception-message exclusions or annotations
+become redundant when adopting this version; their removal belongs to the
+consumer's reviewed upgrade, not an automatic source rewrite by this package.
+
+| Consumer code surface | Application of the existing rules |
+| --- | --- |
+| WordPress runtime and templates | Common formatting, naming and compatibility, with applicable input, output, nonce, SQL and localisation checks. |
+| Standalone PHP and CLI | Retain common formatting, naming and compatibility; scope only demonstrably inapplicable framework checks locally. Use standalone PHPCompatibility where WordPress polyfills are unavailable. |
+| Tests and fixtures | Retain the common convention with narrow foreign lifecycle, controlled-global, diagnostic or intentional synthetic-contract allowances. Ordinary helpers are not exempt because they live in tests. |
+
+`RAN` alone checks syntax; it is not the common formatting/naming profile for
+standalone tools. Consumers own path selection, including root files, templates,
+tests, tools and extensionless PHP entrypoints. Every maintained first-party PHP
+file needs an accounted-for checked scope; syntax-only coverage requires a
+concrete reviewed justification. Generated first-party copies may avoid duplicate
+style checking only when the authoritative source is checked and parity is
+verified. Distinguish source-distribution files from runtime-archive files.
+
+WordPress Yoda conditions remain enabled; preserve evaluation order when fixing
+them. Native filesystem, JSON and base64 operations have no category-wide shared
+waiver: a required locking/atomicity invariant, serialization contract or opaque
+protocol value needs its precise local reason and scope. SQL and rendered-output
+boundaries need source/behavioral evidence when the checker cannot trace them.
+No passing PHPCS result substitutes for PHPStan, behavior tests or these proofs.
+
+Use existing annotations and ruleset comments for narrow local exceptions, with
+matching check/fix scope and regression controls. Blanket all-rule suppressions
+are not permitted in maintained code; intentionally malformed fixtures need an
+explicit fixture boundary. A named file-wide exception requires a file-wide
+reason. Public visibility alone is not a foreign API contract. Transitional debt
+needs an owner and removal condition; an unresolved rationale is not acceptance.
+These decisions do not reopen beta.31 or authorize consumer upgrades/releases.
+
 ## Consumer installation
 
 A consumer can install the package from a root that keeps Composer's default stable minimum:

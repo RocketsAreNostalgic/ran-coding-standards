@@ -227,6 +227,9 @@ $fixtures = array(
     'pluginRuleset' => $tmp . '/plugin-ruleset.xml',
     'libraryRuleset'=> $tmp . '/library-ruleset.xml',
     'ownedMethods'  => $tmp . '/owned-methods.php',
+    'exception'     => $tmp . '/exception.php',
+    'output'        => $tmp . '/output.php',
+    'native'        => $tmp . '/native.php',
 );
 
 register_shutdown_function(
@@ -243,6 +246,32 @@ register_shutdown_function(
 );
 
 $fixtureContents = array(
+    'exception' => <<<'PHP'
+<?php
+namespace RANFixture;
+
+function fail_with_context( $message ) {
+	throw new \RuntimeException( $message );
+}
+PHP,
+    'output' => <<<'PHP'
+<?php
+namespace RANFixture;
+
+function render_failure( \Throwable $failure ) {
+	echo $failure->getMessage();
+}
+PHP,
+    'native' => <<<'PHP'
+<?php
+namespace RANFixture;
+
+function native_operations( $value, $path ) {
+	file_get_contents( $path );
+	json_encode( $value );
+	base64_encode( $value );
+}
+PHP,
     'alignment' => <<<'PHP'
 <?php
 /**
@@ -404,6 +433,7 @@ $assertPhpcsReports = static function (string $standard, string $fixture, string
 
 $assertPhpcsPasses('RAN', $fixtures['valid'], 'RAN rejected a syntactically valid fixture');
 $assertPhpcsReports('RAN', $fixtures['syntaxInvalid'], '/^Generic\.PHP\.Syntax\./', 'RAN failed to report the syntax error');
+$assertPhpcsReports('WordPress-Extra', $fixtures['exception'], '/^WordPress\.Security\.EscapeOutput\.ExceptionNotEscaped$/', 'The locked upstream checker no longer demonstrates the exception-payload diagnostic');
 
 foreach (array('pluginRuleset', 'libraryRuleset') as $profileRuleset) {
     // Exercise the same ruleset with warnings hidden, then prove PHPCBF convergence.
@@ -443,6 +473,15 @@ foreach (array('pluginRuleset', 'libraryRuleset') as $profileRuleset) {
         exit(1);
     }
     $assertPhpcsPasses($fixtures[$profileRuleset], $fixtures['wordpress'], 'A WordPress profile rejected the clean consumer fixture');
+    $assertPhpcsPasses($fixtures[$profileRuleset], $fixtures['exception'], 'A WordPress profile treated an internal Throwable payload as rendered output');
+    $assertPhpcsReports($fixtures[$profileRuleset], $fixtures['output'], '/^WordPress\.Security\.EscapeOutput\.OutputNotEscaped$/', 'The exception-message policy disabled escaping at the actual rendering boundary');
+    foreach (array(
+        'WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents',
+        'WordPress.WP.AlternativeFunctions.json_encode_json_encode',
+        'WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode',
+    ) as $nativeSource) {
+        $assertPhpcsReports($fixtures[$profileRuleset], $fixtures['native'], '/^' . preg_quote($nativeSource, '/') . '$/', 'A native-operation exception was silently promoted to shared policy');
+    }
     $assertPhpcsReports($fixtures[$profileRuleset], $fixtures['compatInvalid'], '/^PHPCompatibility\./', 'PHPCompatibilityWP failed to report syntax outside testVersion');
     $assertPhpcsReports($fixtures[$profileRuleset], $fixtures['prefixInvalid'], '/^WordPress\.NamingConventions\.PrefixAllGlobals\.NonPrefixedFunctionFound$/', 'The consumer-local prefix rule failed to report a non-prefixed global');
 }
