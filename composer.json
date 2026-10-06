@@ -34,10 +34,13 @@
         "test": "@php tests/run.php",
         "check": [
             "@validate:strict",
+            "@standards",
             "@test",
             "@test:consumer-install",
             "@analyze"
         ],
-        "analyze": "phpstan analyse --configuration=phpstan.neon --no-progress"
+        "analyze": "phpstan analyse --configuration=phpstan.neon --no-progress",
+        "standards": "phpcs --standard=.phpcs.xml --report=summary",
+        "standards:fix": "phpcbf --standard=.phpcs.xml --report=summary"
     }
 }

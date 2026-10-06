@@ -2,11 +2,13 @@
 
 declare(strict_types=1);
 
+// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound -- This standalone CLI test owns its process-local variables; declarations remain subject to prefix checks.
+
 // Run inside tests/run.php, using its disposable fixture directory and cleanup.
 /** @var array<string, string> $fixtures Caller-owned disposable fixture paths. */
 /** @var string $phpcs Caller-owned locked PHPCS executable. */
 $owned_source = 'RANOwnedMethods.NamingConventions.ValidMethodName';
-$owned_file = $fixtures['ownedMethods'];
+$owned_file   = $fixtures['ownedMethods'];
 
 $owned_fixture = <<<'PHP'
 <?php
@@ -33,34 +35,37 @@ class ExternalTest extends \PHPUnit\Framework\TestCase {
 function unrelatedGlobalFunction() {}
 PHP;
 
-$owned_assert = static function (bool $condition, string $message): void {
-    if (!$condition) {
-        fwrite(STDERR, $message . "\n");
-        exit(1);
-    }
+$owned_assert = static function ( bool $condition, string $message ): void {
+	if ( ! $condition ) {
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime.
+		fwrite( STDERR, $message . "\n" );
+		exit( 1 );
+	}
 };
 
-$owned_run = static function (string $contents, array $arguments = array()) use ($phpcs, $owned_file, $owned_assert): array {
-    $owned_assert(false !== file_put_contents($owned_file, $contents . "\n"), 'Could not write owned-method fixture.');
-    // Prove the policy without the optional mbstring helper.
-    $command = escapeshellarg(PHP_BINARY) . ' -d disable_functions=mb_strtolower ' . escapeshellarg($phpcs)
-        . ' -n --report=json --standard=RANOwnedMethods';
-    foreach ($arguments as $argument) {
-        $command .= ' ' . escapeshellarg($argument);
-    }
-    $output = array();
-    exec($command . ' ' . escapeshellarg($owned_file) . ' 2>&1', $output, $status);
-    $report = json_decode(implode("\n", $output), true);
-    $owned_assert(is_array($report) && isset($report['files']), 'Owned-method check did not return JSON: ' . implode("\n", $output));
-    $messages = array();
-    foreach ($report['files'] as $file) {
-        $messages = array_merge($messages, $file['messages']);
-    }
-    return array($status, $messages);
+$owned_run = static function ( string $contents, array $arguments = array() ) use ( $phpcs, $owned_file, $owned_assert ): array {
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Write exact disposable fixture or configuration bytes in this CLI-only test.
+	$owned_assert( false !== file_put_contents( $owned_file, $contents . "\n" ), 'Could not write owned-method fixture.' );
+	// Prove the policy without the optional mbstring helper.
+	$command = escapeshellarg( PHP_BINARY ) . ' -d disable_functions=mb_strtolower ' . escapeshellarg( $phpcs )
+		. ' -n --report=json --standard=RANOwnedMethods';
+	foreach ( $arguments as $argument ) {
+		$command .= ' ' . escapeshellarg( $argument );
+	}
+	$output = array();
+	// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- Run the selected local checker or isolated Composer consumer proof as a CLI subprocess.
+	exec( $command . ' ' . escapeshellarg( $owned_file ) . ' 2>&1', $output, $command_status );
+	$report = json_decode( implode( "\n", $output ), true );
+	$owned_assert( is_array( $report ) && isset( $report['files'] ), 'Owned-method check did not return JSON: ' . implode( "\n", $output ) );
+	$messages = array();
+	foreach ( $report['files'] as $file ) {
+		$messages = array_merge( $messages, $file['messages'] );
+	}
+	return array( $command_status, $messages );
 };
 
-list($owned_status, $owned_messages) = $owned_run($owned_fixture);
-$owned_assert(0 === $owned_status && array() === $owned_messages, 'Compliant methods, magic methods or narrow external signature were rejected.');
+list($owned_status, $owned_messages) = $owned_run( $owned_fixture );
+$owned_assert( 0 === $owned_status && array() === $owned_messages, 'Compliant methods, magic methods or narrow external signature were rejected.' );
 
 // One bad declaration in each scope. Nested/global functions are deliberately outside this check.
 $owned_bad = <<<'PHP'
@@ -89,44 +94,49 @@ class OtherTest extends \PHPUnit\Framework\TestCase {
 }
 PHP;
 
-list($owned_status, $owned_messages) = $owned_run($owned_fixture . "\n" . $owned_bad);
-$owned_expected = array('contractName', 'childContractName', 'unrelatedCamelCase', 'fromFailure', 'traitName', 'anonymousName', 'ordinaryName', 'deprecatedName', '__owned_name', '___owned_helper', '0xc384', '0xc785', 'setUp');
-$owned_assert(1 === $owned_status && count($owned_expected) === count($owned_messages), 'Owned declarations were missed or unrelated declarations were reported: ' . json_encode($owned_messages));
-foreach ($owned_expected as $owned_index => $owned_name) {
-    $message = $owned_messages[$owned_index];
-    $code = 0 === strpos($owned_name, '__') ? 'ReservedPrefix' : 'NotSnakeCase';
-    $owned_assert(
-        $owned_source . '.' . $code === $message['source']
-        && false !== strpos($message['message'], '"' . $owned_name . '"')
-        && 'ERROR' === $message['type'] && false === $message['fixable'],
-        'Expected a non-fixable, blocking diagnostic for ' . $owned_name . ': ' . json_encode($message)
-    );
+list($owned_status, $owned_messages) = $owned_run( $owned_fixture . "\n" . $owned_bad );
+// phpcs:ignore PHPCompatibility.Numbers.RemovedHexadecimalNumericStrings.Found -- These strings are exact expected diagnostic identifiers, never numeric operands.
+$owned_expected = array( 'contractName', 'childContractName', 'unrelatedCamelCase', 'fromFailure', 'traitName', 'anonymousName', 'ordinaryName', 'deprecatedName', '__owned_name', '___owned_helper', '0xc384', '0xc785', 'setUp' );
+// phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Encode machine-readable fixture data or CLI diagnostics without WordPress helpers.
+$owned_assert( 1 === $owned_status && count( $owned_expected ) === count( $owned_messages ), 'Owned declarations were missed or unrelated declarations were reported: ' . json_encode( $owned_messages ) );
+foreach ( $owned_expected as $owned_index => $owned_name ) {
+	$message = $owned_messages[ $owned_index ];
+	$code    = 0 === strpos( $owned_name, '__' ) ? 'ReservedPrefix' : 'NotSnakeCase';
+	$owned_assert(
+		$owned_source . '.' . $code === $message['source']
+		&& false !== strpos( $message['message'], '"' . $owned_name . '"' )
+		&& 'ERROR' === $message['type'] && false === $message['fixable'],
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Encode machine-readable fixture data or CLI diagnostics without WordPress helpers.
+		'Expected a non-fixable, blocking diagnostic for ' . $owned_name . ': ' . json_encode( $message )
+	);
 }
 
 // PHPCS tokenizes newer syntax on the supported PHP 7.4 tool runtime too.
-list($owned_status, $owned_messages) = $owned_run('<?php enum State { case Ready; public function enumName() {} }');
-$owned_assert(1 === $owned_status && 1 === count($owned_messages) && $owned_source . '.NotSnakeCase' === $owned_messages[0]['source'], 'Enum method naming escaped the check.');
+list($owned_status, $owned_messages) = $owned_run( '<?php enum State { case Ready; public function enumName() {} }' );
+$owned_assert( 1 === $owned_status && 1 === count( $owned_messages ) && $owned_source . '.NotSnakeCase' === $owned_messages[0]['source'], 'Enum method naming escaped the check.' );
 
 // An explicit lifecycle exception must not hide a new method beside it.
-list($owned_status, $owned_messages) = $owned_run(str_replace('function owned_helper()', 'function ownedHelper()', $owned_fixture));
-$owned_assert(1 === $owned_status && 1 === count($owned_messages) && false !== strpos($owned_messages[0]['message'], '"ownedHelper"'), 'A narrow external override exception hid an owned sibling method.');
+list($owned_status, $owned_messages) = $owned_run( str_replace( 'function owned_helper()', 'function ownedHelper()', $owned_fixture ) );
+$owned_assert( 1 === $owned_status && 1 === count( $owned_messages ) && false !== strpos( $owned_messages[0]['message'], '"ownedHelper"' ), 'A narrow external override exception hid an owned sibling method.' );
 
 // Removing comments must expose the external name: there is no global setUp allowlist.
-list($owned_status, $owned_messages) = $owned_run($owned_fixture, array('--ignore-annotations'));
-$owned_assert(1 === $owned_status && 1 === count($owned_messages) && false !== strpos($owned_messages[0]['message'], '"setUp"'), 'External signatures bypassed explicit exception handling.');
+list($owned_status, $owned_messages) = $owned_run( $owned_fixture, array( '--ignore-annotations' ) );
+$owned_assert( 1 === $owned_status && 1 === count( $owned_messages ) && false !== strpos( $owned_messages[0]['message'], '"setUp"' ), 'External signatures bypassed explicit exception handling.' );
 
 // This additive standard must not be silently inherited by any existing profile.
-foreach (array('RAN', 'RANWordPress', 'RANWordPressPlugin', 'RANWordPressLibrary') as $owned_profile) {
-    $output = array();
-    exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($phpcs) . ' -e --standard=' . escapeshellarg($owned_profile) . ' 2>&1', $output, $owned_status);
-    $owned_assert(0 === $owned_status && false === strpos(implode("\n", $output), 'RANOwnedMethods'), 'Existing profile unexpectedly activates owned-method checks: ' . $owned_profile);
+foreach ( array( 'RAN', 'RANWordPress', 'RANWordPressPlugin', 'RANWordPressLibrary' ) as $owned_profile ) {
+	$output = array();
+	// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- Run the selected local checker or isolated Composer consumer proof as a CLI subprocess.
+	exec( escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( $phpcs ) . ' -e --standard=' . escapeshellarg( $owned_profile ) . ' 2>&1', $output, $owned_status );
+	$owned_assert( 0 === $owned_status && false === strpos( implode( "\n", $output ), 'RANOwnedMethods' ), 'Existing profile unexpectedly activates owned-method checks: ' . $owned_profile );
 }
 
-fwrite(STDOUT, "Opt-in owned-method checks cover inherited, implementing, trait, anonymous and enum scopes without broad signature exemptions.\n");
+// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime.
+fwrite( STDOUT, "Opt-in owned-method checks cover inherited, implementing, trait, anonymous and enum scopes without broad signature exemptions.\n" );
 
 // PHP accepts arbitrary high bytes: the naming policy must reject deceptive names.
-foreach (array("ä_helper", "处理_项目2", "cafe\u{0301}_helper", "safe\u{034F}name", "safe\u{FE0F}name", "\u{1E4D0}", "Ⅰ", "Ⓐ", "safe\u{202E}evil", "safe😀", "safe\u{200B}name", "safe·name", "safe\xFFname") as $invalid_name) {
-    list($owned_status, $owned_messages) = $owned_run('<?php class BadName { public function ' . $invalid_name . '() {} }');
-    $owned_assert(1 === $owned_status && 1 === count($owned_messages) && $owned_source . '.NotSnakeCase' === $owned_messages[0]['source'], 'A nonconforming Unicode/byte identifier escaped the check.');
-    $owned_assert(false !== strpos($owned_messages[0]['message'], '"0x' . bin2hex($invalid_name) . '"') && 1 === preg_match('/\A[\x20-\x7e]*\z/', $owned_messages[0]['message']), 'Rejected identifier was not rendered as safe ASCII hex.');
+foreach ( array( 'ä_helper', '处理_项目2', "cafe\u{0301}_helper", "safe\u{034F}name", "safe\u{FE0F}name", "\u{1E4D0}", 'Ⅰ', 'Ⓐ', "safe\u{202E}evil", 'safe😀', "safe\u{200B}name", 'safe·name', "safe\xFFname" ) as $invalid_name ) {
+	list($owned_status, $owned_messages) = $owned_run( '<?php class BadName { public function ' . $invalid_name . '() {} }' );
+	$owned_assert( 1 === $owned_status && 1 === count( $owned_messages ) && $owned_source . '.NotSnakeCase' === $owned_messages[0]['source'], 'A nonconforming Unicode/byte identifier escaped the check.' );
+	$owned_assert( false !== strpos( $owned_messages[0]['message'], '"0x' . bin2hex( $invalid_name ) . '"' ) && 1 === preg_match( '/\A[\x20-\x7e]*\z/', $owned_messages[0]['message'] ), 'Rejected identifier was not rendered as safe ASCII hex.' );
 }
