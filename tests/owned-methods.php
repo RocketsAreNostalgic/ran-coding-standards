@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 // Run inside tests/run.php, using its disposable fixture directory and cleanup.
+/** @var array<string, string> $fixtures Caller-owned disposable fixture paths. */
+/** @var string $phpcs Caller-owned locked PHPCS executable. */
 $owned_source = 'RANOwnedMethods.NamingConventions.ValidMethodName';
 $owned_file = $fixtures['ownedMethods'];
 

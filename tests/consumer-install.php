@@ -93,7 +93,7 @@ if (false === $installed) {
     exit(1);
 }
 
-foreach (array('phpcompatibility/php-compatibility', 'phpcompatibility/phpcompatibility-paragonie', 'phpcompatibility/phpcompatibility-wp') as $developmentPackage) {
+foreach (array('phpcompatibility/php-compatibility', 'phpcompatibility/phpcompatibility-paragonie', 'phpcompatibility/phpcompatibility-wp', 'phpstan/phpstan') as $developmentPackage) {
     if (false !== strpos($installed, '"name": "' . $developmentPackage . '"')) {
         fwrite(STDERR, sprintf("Stable consumers unexpectedly install development package %s.\n", $developmentPackage));
         exit(1);

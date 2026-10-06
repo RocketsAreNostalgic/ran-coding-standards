@@ -204,6 +204,22 @@ in diagnostics. Safe ASCII identifiers remain readable in diagnostics. Genuine
 PHP magic methods retain their exemption; other double-underscore prefixes
 remain reserved.
 
+The package's own `composer analyze` runs locked PHPStan at level 5 over the
+repository root, including the custom sniff and all maintained test programs.
+Only the root dependency directory is excluded; new PHP files enter automatically.
+The existing test runner independently compares maintained-file discovery with
+the analyzer's actual CLI file trace, checks the effective level, and exercises
+new root/nested files and an exclusion that would otherwise leave clean analysis.
+Nonstandard PHP extensions require deliberate scope review rather than silently
+escaping discovery. No analysis baselines or maintained-file exemptions are added.
+
+Caller-provided include variables have explicit PHPDoc contracts. PHPDoc types
+are not treated as certain, preserving defensive SimpleXML failure checks.
+PHPCS's real autoloader and locked PHPCSUtils supply dependency symbols without
+claiming those dependencies are directly analyzed. PHPStan remains a development
+dependency and does not install transitively in consumers. This quality-only
+change does not alter or release any exported sniff or ruleset.
+
 ## Releases
 
 Release Please manages releases through the shared Profile A workflow. See

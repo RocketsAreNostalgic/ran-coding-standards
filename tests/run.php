@@ -489,3 +489,99 @@ foreach (array('pluginRuleset', 'libraryRuleset') as $profileRuleset) {
 require __DIR__ . '/owned-methods.php';
 
 fwrite(STDOUT, "All RAN standards preserve active inheritance and consumer boundaries, and their behavioral fixtures pass.\n");
+
+// Compare independent maintained-file discovery with the locked CLI's actual debug paths.
+$maintainedFiles = static function (string $root): array {
+    $filter = new RecursiveCallbackFilterIterator(
+        new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
+        static function (SplFileInfo $file) use ($root): bool {
+            return !in_array($file->getPathname(), array($root . '/vendor', $root . '/.git'), true);
+        }
+    );
+    $files = array();
+    foreach (new RecursiveIteratorIterator($filter) as $file) {
+        if (!$file->isFile()) {
+            continue;
+        }
+        if ('php' === $file->getExtension()) {
+            $files[] = $file->getPathname();
+        } elseif (0 === strcasecmp('php', $file->getExtension()) || preg_match('/^(?:#![^\n]*\n)?\s*<\?(?:php\b|=)/i', (string) file_get_contents($file->getPathname(), false, null, 0, 512))) {
+            throw new RuntimeException('Review PHP with a nonstandard extension: ' . $file->getPathname());
+        }
+    }
+    sort($files);
+    return $files;
+};
+$runAnalysis = static function (string $configuration) use ($root): array {
+    $lines = array();
+    exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($root . '/vendor/bin/phpstan') . ' analyse --debug --no-progress --error-format=json --configuration=' . escapeshellarg($configuration) . ' 2>&1', $lines, $status);
+    $output = implode("\n", $lines);
+    $start = strpos($output, '{"totals"');
+    if (false === $start || !in_array($status, array(0, 1), true)) {
+        throw new RuntimeException('Analysis failed to return diagnostic evidence: ' . $output);
+    }
+    $paths = array_values(array_filter(explode("\n", substr($output, 0, $start)), 'is_file'));
+    sort($paths);
+    return array($status, $paths, json_decode(substr($output, $start), true, 512, JSON_THROW_ON_ERROR));
+};
+$configuration = $root . '/phpstan.neon';
+list($analysisStatus, $analysedFiles) = $runAnalysis($configuration);
+if (0 !== $analysisStatus || $maintainedFiles($root) !== $analysedFiles) {
+    throw new RuntimeException('Every maintained PHP file must pass direct analysis; vendor is the only dependency exemption.');
+}
+$parameters = array();
+exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($root . '/vendor/bin/phpstan') . ' dump-parameters --json --configuration=' . escapeshellarg($configuration), $parameters, $parameterStatus);
+$parameters = json_decode(implode("\n", $parameters), true, 512, JSON_THROW_ON_ERROR);
+if (0 !== $parameterStatus || 5 > (int) $parameters['level']) {
+    throw new RuntimeException('The effective PHPStan level must remain at least five.');
+}
+$probeRoot = sys_get_temp_dir() . '/ran-analysis-probe-' . bin2hex(random_bytes(6));
+$probeFile = $probeRoot . '/tests/split.php';
+$excludedConfig = $probeRoot . '/excluded.neon';
+$probeConfig = $probeRoot . '/phpstan.neon';
+$rootProbe = $probeRoot . '/root.php';
+$extensionlessProbe = $probeRoot . '/entrypoint';
+try {
+    if (!mkdir($probeRoot . '/tests', 0700, true)) {
+        throw new RuntimeException('Cannot create private analysis probe.');
+    }
+    mkdir($probeRoot . '/vendor', 0700);
+    file_put_contents($probeConfig, str_replace('vendor/', $root . '/vendor/', (string) file_get_contents($configuration)));
+    file_put_contents($rootProbe, "<?php\n");
+    file_put_contents($probeFile, "<?php\nran_missing_analysis_probe();\n");
+    list($analysisStatus, $analysedFiles, $analysisReport) = $runAnalysis($probeConfig);
+    if (1 !== $analysisStatus || $maintainedFiles($probeRoot) !== $analysedFiles || !in_array('function.notFound', array_column($analysisReport['files'][$probeFile]['messages'], 'identifier'), true)) {
+        throw new RuntimeException('New nested PHP must enter analysis and report its actual diagnostic.');
+    }
+    file_put_contents($excludedConfig, "includes:\n    - " . $probeConfig . "\nparameters:\n    excludePaths:\n        analyse:\n            - " . $probeFile . "\n");
+    list($analysisStatus, $analysedFiles) = $runAnalysis($excludedConfig);
+    if (0 !== $analysisStatus || array($probeFile) !== array_values(array_diff($maintainedFiles($probeRoot), $analysedFiles))) {
+        throw new RuntimeException('An excluded maintained file must fail independent coverage despite clean analysis: ' . json_encode(array($analysisStatus, array_values(array_diff($maintainedFiles($probeRoot), $analysedFiles)))));
+    }
+    file_put_contents($extensionlessProbe, "#!/usr/bin/env php\n<?php\n");
+    $nonstandardRejected = false;
+    try {
+        $maintainedFiles($probeRoot);
+    } catch (RuntimeException $error) {
+        $nonstandardRejected = 0 === strpos($error->getMessage(), 'Review PHP with a nonstandard extension:');
+    }
+    if (!$nonstandardRejected) {
+        throw new RuntimeException('Extensionless PHP must not silently escape independent coverage.');
+    }
+} finally {
+    foreach (array($probeFile, $excludedConfig, $probeConfig, $rootProbe, $extensionlessProbe) as $probePath) {
+        if (is_file($probePath)) {
+            unlink($probePath);
+        }
+    }
+    if (is_dir($probeRoot . '/tests')) {
+        rmdir($probeRoot . '/tests');
+    }
+    if (is_dir($probeRoot . '/vendor')) {
+        rmdir($probeRoot . '/vendor');
+    }
+    if (is_dir($probeRoot)) {
+        rmdir($probeRoot);
+    }
+}
+fwrite(STDOUT, "All maintained PHP is directly analysed at level five or stronger; future paths and exclusions are guarded.\n");

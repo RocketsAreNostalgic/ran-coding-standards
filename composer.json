@@ -16,7 +16,8 @@
     "require-dev": {
         "phpcompatibility/php-compatibility": "10.0.0-alpha2",
         "phpcompatibility/phpcompatibility-paragonie": "2.0.0-alpha2",
-        "phpcompatibility/phpcompatibility-wp": "3.0.0-alpha2"
+        "phpcompatibility/phpcompatibility-wp": "3.0.0-alpha2",
+        "phpstan/phpstan": "^2.2.16"
     },
     "config": {
         "allow-plugins": {
@@ -34,7 +35,9 @@
         "check": [
             "@validate:strict",
             "@test",
-            "@test:consumer-install"
-        ]
+            "@test:consumer-install",
+            "@analyze"
+        ],
+        "analyze": "phpstan analyse --configuration=phpstan.neon --no-progress"
     }
 }
