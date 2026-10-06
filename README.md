@@ -241,7 +241,7 @@ Occurrence-specific exceptions have these concrete boundaries:
 | Native filesystem and pipes | Read repository bytes, create/remove private disposable fixtures, and exchange inert checker input without loading WordPress. |
 | Process and JSON operations | Execute the selected CLI checkers/isolated Composer proof and encode machine-readable fixture evidence. |
 | CLI termination and cleanup | Integer `exit` arguments are status codes, not rendered output; suppressed shutdown cleanup warnings must not replace an earlier test failure. |
-| Literal diagnostic data | Two hexadecimal strings are expected identifier bytes, never arithmetic operands; the repeatability assertion preserves its captured hash before a fresh filesystem observation. |
+| Literal diagnostic data | Two hexadecimal strings are expected identifier bytes, never arithmetic operands. |
 
 Every exception uses an exact diagnostic at its occurrence. The existing tests
 read actual source annotations and append outside-scope violations through the

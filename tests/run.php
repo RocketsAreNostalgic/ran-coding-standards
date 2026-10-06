@@ -517,8 +517,7 @@ foreach ( array( 'pluginRuleset', 'libraryRuleset' ) as $profile_ruleset ) {
 	$output     = array();
 	// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- Run the selected local checker or isolated Composer consumer proof as a CLI subprocess.
 	exec( $fix_command, $output, $command_status );
-	// phpcs:ignore WordPress.PHP.YodaConditions.NotYoda -- Retain the captured expected hash before the new filesystem observation in this repeatability assertion.
-	if ( 0 !== $command_status || $fixed_hash !== hash_file( 'sha256', $fixtures['alignment'] ) ) {
+	if ( 0 !== $command_status || hash_file( 'sha256', $fixtures['alignment'] ) !== $fixed_hash ) {
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime.
 		fwrite( STDERR, "A second PHPCBF pass was not stable.\n" );
 		exit( 1 );
@@ -716,14 +715,21 @@ $outside_probes = array(
 	'WordPress.WP.AlternativeFunctions.unlink_unlink'  => "unlink( 'never-executed' );",
 	'WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents' => "file_get_contents( 'never-executed' );",
 	'PHPCompatibility.Numbers.RemovedHexadecimalNumericStrings.Found' => "\$hex = array( '0xc384' );",
-	'WordPress.PHP.YodaConditions.NotYoda'             => 'if ( $value === 1 ) {}',
 );
-foreach ( $source_files as $source_path ) {
-	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Read owned source as inert checker input without executing its fixture operations.
-	$source = file_get_contents( $source_path );
-	if ( array() !== $inspect_source( $source, $source_path ) ) {
-		throw new RuntimeException( 'Existing source exceptions must pass the complete local profile: ' . $source_path );
+foreach ( $outside_probes as $diagnostic => $probe ) {
+	$adjacent         = "<?php\n// phpcs:ignore " . $diagnostic . " -- Intentional boundary probe.\n" . $probe . "\n" . $probe . "\n";
+	$adjacent_sources = $inspect_source( $adjacent, $root . '/tests/new-source.php' );
+	$matching_sources = array_filter(
+		$adjacent_sources,
+		static function ( string $source ) use ( $diagnostic ): bool {
+			return $diagnostic === $source;
+		}
+	);
+	if ( 1 !== count( $matching_sources ) ) {
+		throw new RuntimeException( 'A precise occurrence must leave its immediate sibling checked: ' . $diagnostic );
 	}
+}
+$inspect_annotations = static function ( string $source, string $source_path ) use ( $root, $outside_probes ): array {
 	$exceptions                = array();
 	$has_cli_binding_allowance = false;
 	foreach ( token_get_all( $source ) as $token ) {
@@ -733,26 +739,56 @@ foreach ( $source_files as $source_path ) {
 		if ( preg_match( '/@codingStandards|phpcs:(?:ignoreFile|set)/i', $token[1] ) ) {
 			throw new RuntimeException( 'Legacy, file-wide and property-changing annotations are not source exceptions.' );
 		}
-		if ( ! preg_match( '/phpcs:(disable|ignore)\s+(.+?)\s+--\s+\S/i', $token[1], $annotation ) ) {
+		if ( ! preg_match_all( '/phpcs:(disable|ignore)\b([^\r\n]*?)(?=@?phpcs:|[\r\n]|$)/i', $token[1], $annotations, PREG_SET_ORDER ) ) {
 			if ( preg_match( '/phpcs:(?:disable|ignore)/i', $token[1] ) ) {
 				throw new RuntimeException( 'Source exceptions must name exact diagnostics and their reason.' );
 			}
 			continue;
 		}
-		foreach ( explode( ',', $annotation[2] ) as $selector ) {
-			$selector = trim( $selector );
-			if ( 'disable' === strtolower( $annotation[1] ) ) {
-				$has_cli_binding_allowance = true;
-				if ( 'WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound' !== $selector || ! in_array( $source_path, array( $root . '/tests/run.php', $root . '/tests/owned-methods.php', $root . '/tests/consumer-install.php' ), true ) ) {
-					throw new RuntimeException( 'Only the three existing CLI files justify process-local variable allowances.' );
+		foreach ( $annotations as $directive ) {
+			if ( ! preg_match( '/^\s+(.+?)\s+--\s+\S/', $directive[2], $detail ) ) {
+				throw new RuntimeException( 'Every source exception must name exact diagnostics and its reason.' );
+			}
+			foreach ( explode( ',', $detail[1] ) as $selector ) {
+				$selector = trim( $selector );
+				if ( 'disable' === strtolower( $directive[1] ) ) {
+					$has_cli_binding_allowance = true;
+					if ( 'WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound' !== $selector || ! in_array( $source_path, array( $root . '/tests/run.php', $root . '/tests/owned-methods.php', $root . '/tests/consumer-install.php' ), true ) ) {
+						throw new RuntimeException( 'Only the three existing CLI files justify process-local variable allowances.' );
+					}
+				} elseif ( ! isset( $outside_probes[ $selector ] ) ) {
+					throw new RuntimeException( 'A new source exception needs an actual outside-scope regression: ' . $selector );
+				} else {
+					$exceptions[ $selector ] = $outside_probes[ $selector ];
 				}
-			} elseif ( ! isset( $outside_probes[ $selector ] ) ) {
-				throw new RuntimeException( 'A new source exception needs an actual outside-scope regression: ' . $selector );
-			} else {
-				$exceptions[ $selector ] = $outside_probes[ $selector ];
 			}
 		}
 	}
+	return array( $exceptions, $has_cli_binding_allowance );
+};
+foreach ( array( 'phpcs:ignore WordPress', '@PHPCS:IGNORE WordPress.NamingConventions', 'PHPCS:DISABLE WordPress.NamingConventions.PrefixAllGlobals', '@phpcs:disable' ) as $second_directive ) {
+	$multiline = "<?php\n/*\n phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Precise first directive.\n " . $second_directive . " -- Unacceptable second directive.\n */\nfunction unrelated_helper() {}\n";
+	$rejected  = false;
+	try {
+		$inspect_annotations( $multiline, $root . '/tests/run.php' );
+	} catch ( RuntimeException $error ) {
+		$rejected = true;
+	}
+	if ( ! $rejected ) {
+		throw new RuntimeException( 'Every directive in a multiline comment must be inspected, including case and annotation prefixes.' );
+	}
+}
+$hidden_declaration = "<?php\n/*\n phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Precise first directive.\n phpcs:disable WordPress.NamingConventions.PrefixAllGlobals -- Unacceptable second directive.\n */\nfunction unrelated_helper() {}\n";
+if ( in_array( 'WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound', $inspect_source( $hidden_declaration, $root . '/tests/run.php' ), true ) ) {
+	throw new RuntimeException( 'The real checker must demonstrate the multiline suppression bypass rejected by the annotation guard.' );
+}
+foreach ( $source_files as $source_path ) {
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Read owned source as inert checker input without executing its fixture operations.
+	$source = file_get_contents( $source_path );
+	if ( array() !== $inspect_source( $source, $source_path ) ) {
+		throw new RuntimeException( 'Existing source exceptions must pass the complete local profile: ' . $source_path );
+	}
+	list($exceptions, $has_cli_binding_allowance) = $inspect_annotations( $source, $source_path );
 	foreach ( $exceptions as $diagnostic => $probe ) {
 		if ( ! in_array( $diagnostic, $inspect_source( $source . "\n" . $probe . "\n", $source_path ), true ) ) {
 			throw new RuntimeException( 'An occurrence exception hid a new operation after the source: ' . $source_path . ' ' . $diagnostic );
@@ -771,9 +807,15 @@ foreach ( $source_files as $source_path ) {
 	}
 }
 foreach ( array( 'new.php', 'new-source/tests/owned.php', 'tests/vendor/owned.php' ) as $source_path ) {
-	$sources = $inspect_source( '<?php function unrelated_helper() {}', $root . '/' . $source_path );
-	if ( ! in_array( 'WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound', $sources, true ) ) {
-		throw new RuntimeException( 'New maintained source escaped the local prefix profile.' );
+	$sources = $inspect_source( '<?php class RogueClass {} const ROGUE_VALUE = 1; function unrelated_helper() {} $unrelated = 1;', $root . '/' . $source_path );
+	foreach ( array( 'Class', 'Constant', 'Function', 'Variable' ) as $declaration ) {
+		if ( ! in_array( 'WordPress.NamingConventions.PrefixAllGlobals.NonPrefixed' . $declaration . 'Found', $sources, true ) ) {
+			throw new RuntimeException( 'New maintained source escaped the local prefix profile: ' . $declaration );
+		}
+	}
+	$namespace_sources = $inspect_source( '<?php namespace RogueVendor;', $root . '/' . $source_path );
+	if ( ! in_array( 'WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedNamespaceFound', $namespace_sources, true ) ) {
+		throw new RuntimeException( 'New maintained namespaces escaped the local prefix profile.' );
 	}
 }
 $method_sources = $inspect_source( '<?php class RANOwnedMethodsProbe extends \\RuntimeException { public function camelCase() {} }', $root . '/new.php' );
