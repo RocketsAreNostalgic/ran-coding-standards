@@ -654,6 +654,13 @@ try {
 fwrite( STDOUT, "All maintained PHP is directly analysed at level five or stronger; future paths and exclusions are guarded.\n" );
 
 // The local source profile is independent of exported consumer rules and their fixture payloads.
+$source_profile_is_scoped = static function ( SimpleXMLElement $document ): bool {
+	return array() !== $document->xpath( '//include-pattern | //rule//exclude-pattern | //rule/exclude | //*[@phpcs-only or @phpcbf-only]' );
+};
+$source_profile           = simplexml_load_file( $root . '/.phpcs.xml', 'SimpleXMLElement', LIBXML_NONET );
+if ( false === $source_profile || $source_profile_is_scoped( $source_profile ) ) {
+	throw new RuntimeException( 'Local source rules must not acquire conditional or path-scoped exceptions.' );
+}
 require_once $root . '/vendor/squizlabs/php_codesniffer/autoload.php';
 // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Read the canonical checker/fixer contract as local JSON data.
 $source_manifest = json_decode( file_get_contents( $root . '/composer.json' ), true, 512, JSON_THROW_ON_ERROR );
@@ -672,9 +679,9 @@ sort( $selected_files );
 if ( $source_files !== $selected_files ) {
 	throw new RuntimeException( 'Local standards must select every maintained PHP file.' );
 }
-$inspect_source = static function ( string $source, string $source_path ) use ( $root ): array {
+$inspect_source = static function ( string $source, string $source_path, string $standard = '.phpcs.xml' ) use ( $root ): array {
 	// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_proc_open -- Run only the locked checker on inert source over private process pipes.
-	$process = proc_open( array( PHP_BINARY, $root . '/vendor/bin/phpcs', '--standard=' . $root . '/.phpcs.xml', '--report=json', '-q', '--stdin-path=' . $source_path, '-' ), array( array( 'pipe', 'r' ), array( 'pipe', 'w' ), array( 'pipe', 'w' ) ), $pipes, $root );
+	$process = proc_open( array( PHP_BINARY, $root . '/vendor/bin/phpcs', '--standard=' . $root . '/' . $standard, '--report=json', '-q', '--stdin-path=' . $source_path, '-' ), array( array( 'pipe', 'r' ), array( 'pipe', 'w' ), array( 'pipe', 'w' ) ), $pipes, $root );
 	if ( ! is_resource( $process ) ) {
 		throw new RuntimeException( 'Could not start the locked source checker.' );
 	}
@@ -701,6 +708,38 @@ $inspect_source = static function ( string $source, string $source_path ) use ( 
 	}
 	return $sources;
 };
+$selector_probe = 'source-selector-' . bin2hex( random_bytes( 8 ) ) . '.xml';
+$json_code      = 'WordPress.WP.AlternativeFunctions.json_encode_json_encode';
+$path_probe     = '<?php json_encode( array() );';
+if ( ! in_array( $json_code, $inspect_source( $path_probe, $root . '/src/unreviewed-future.php' ), true ) ) {
+	throw new RuntimeException( 'A future source path must enforce the native JSON diagnostic.' );
+}
+try {
+	foreach ( array(
+		'<rule ref="WordPress.WP.AlternativeFunctions.json_encode_json_encode"><include-pattern>^(?!*unreviewed-future[.]php)</include-pattern></rule>',
+		'<rule ref="WordPress.WP.AlternativeFunctions.json_encode_json_encode"><exclude-pattern>*/src/unreviewed-future.php</exclude-pattern></rule>',
+		'<rule ref="RANWordPressLibrary" phpcbf-only="true"/>',
+	) as $selector ) {
+		$mutant_xml = false !== strpos( $selector, 'phpcbf-only' )
+			? str_replace( '<rule ref="RANWordPressLibrary"/>', $selector, $source_profile->asXML() )
+			: str_replace( '</ruleset>', $selector . '</ruleset>', $source_profile->asXML() );
+		$document   = simplexml_load_string( $mutant_xml, 'SimpleXMLElement', LIBXML_NONET );
+		if ( false === $document || ! $source_profile_is_scoped( $document ) ) {
+			throw new RuntimeException( 'A conditional or path selector escaped the local source guard.' );
+		}
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Create only the disposable local ruleset mutant for the diagnostic control.
+		file_put_contents( $root . '/' . $selector_probe, $mutant_xml );
+		if ( in_array( $json_code, $inspect_source( $path_probe, $root . '/src/unreviewed-future.php', $selector_probe ), true ) ) {
+			throw new RuntimeException( 'The selector control did not reproduce its hidden diagnostic. ' . $selector );
+		}
+		if ( false === strpos( $selector, 'phpcbf-only' ) && ! in_array( $json_code, $inspect_source( $path_probe, $root . '/src/adjacent-future.php', $selector_probe ), true ) ) {
+			throw new RuntimeException( 'The targeted selector must leave the adjacent path checked.' );
+		}
+	}
+} finally {
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- Remove only the disposable local selector-control ruleset.
+	unlink( $root . '/' . $selector_probe );
+}
 $outside_probes = array(
 	'WordPress.PHP.DiscouragedPHPFunctions.system_calls_proc_open' => "proc_open( 'never executed', array(), \$pipes );",
 	'WordPress.WP.AlternativeFunctions.file_system_operations_fclose' => 'fclose( STDOUT );',
