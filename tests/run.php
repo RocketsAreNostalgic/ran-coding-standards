@@ -587,16 +587,23 @@ list($analysis_status, $analysed_files) = $run_analysis( $configuration );
 if ( 0 !== $analysis_status || $maintained_files( $root ) !== $analysed_files ) {
 	throw new RuntimeException( 'Every maintained PHP file must pass direct analysis; vendor is the only dependency exemption.' );
 }
-$parameters = array();
-// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- Run the selected local checker or isolated Composer consumer proof as a CLI subprocess.
-exec( escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( $root . '/vendor/bin/phpstan' ) . ' dump-parameters --json --configuration=' . escapeshellarg( $configuration ), $parameters, $parameter_status );
-$parameters = json_decode( implode( "\n", $parameters ), true, 512, JSON_THROW_ON_ERROR );
-if ( 0 !== $parameter_status || 5 > (int) $parameters['level'] ) {
-	throw new RuntimeException( 'The effective PHPStan level must remain at least five.' );
-}
+$assert_analysis_parameters = static function ( string $configuration ) use ( $root ): void {
+	$parameters = array();
+	// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- Read the locked analyzer's effective configuration, including inherited suppression settings.
+	exec( escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( $root . '/vendor/bin/phpstan' ) . ' dump-parameters --json --configuration=' . escapeshellarg( $configuration ), $parameters, $parameter_status );
+	$parameters = json_decode( implode( "\n", $parameters ), true, 512, JSON_THROW_ON_ERROR );
+	if ( 0 !== $parameter_status || 5 > (int) $parameters['level'] ) {
+		throw new RuntimeException( 'The effective PHPStan level must remain at least five.' );
+	}
+	if ( array() !== $parameters['ignoreErrors'] ) {
+		throw new RuntimeException( 'PHPStan ignored errors need explicit review.' );
+	}
+};
+$assert_analysis_parameters( $configuration );
 $probe_root          = sys_get_temp_dir() . '/ran-analysis-probe-' . bin2hex( random_bytes( 6 ) );
 $probe_file          = $probe_root . '/tests/split.php';
 $excluded_config     = $probe_root . '/excluded.neon';
+$ignored_config      = $probe_root . '/ignored.neon';
 $probe_config        = $probe_root . '/phpstan.neon';
 $root_probe          = $probe_root . '/root.php';
 $extensionless_probe = $probe_root . '/entrypoint';
@@ -617,6 +624,25 @@ try {
 	if ( 1 !== $analysis_status || $maintained_files( $probe_root ) !== $analysed_files || ! in_array( 'function.notFound', array_column( $analysis_report['files'][ $probe_file ]['messages'], 'identifier' ), true ) ) {
 		throw new RuntimeException( 'New nested PHP must enter analysis and report its actual diagnostic.' );
 	}
+	foreach ( array( "        - '#.*#'\n", "        - identifier: function.notFound\n" ) as $ignored_error ) {
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Mutate only an inherited disposable configuration to demonstrate effective suppression.
+		file_put_contents( $ignored_config, "parameters:\n    ignoreErrors:\n" . $ignored_error );
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Include the suppression indirectly so raw top-level inspection cannot satisfy the guard control.
+		file_put_contents( $excluded_config, "includes:\n    - " . $probe_config . "\n    - " . $ignored_config . "\n" );
+		list($analysis_status, $analysed_files, $analysis_report) = $run_analysis( $excluded_config );
+		if ( 0 !== $analysis_status || $maintained_files( $probe_root ) !== $analysed_files || 0 !== $analysis_report['totals']['file_errors'] || array() !== $analysis_report['errors'] ) {
+			throw new RuntimeException( 'An effective ignore must hide the actual diagnostic without changing analyzed files.' );
+		}
+		$ignored_error_rejected = false;
+		try {
+			$assert_analysis_parameters( $excluded_config );
+		} catch ( RuntimeException $error ) {
+			$ignored_error_rejected = 'PHPStan ignored errors need explicit review.' === $error->getMessage();
+		}
+		if ( ! $ignored_error_rejected ) {
+			throw new RuntimeException( 'Effective diagnostic suppression must fail independently of clean analysis.' );
+		}
+	}
 	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Write exact disposable fixture or configuration bytes in this CLI-only test.
 	file_put_contents( $excluded_config, "includes:\n    - " . $probe_config . "\nparameters:\n    excludePaths:\n        analyse:\n            - " . $probe_file . "\n" );
 	list($analysis_status, $analysed_files) = $run_analysis( $excluded_config );
@@ -636,7 +662,7 @@ try {
 		throw new RuntimeException( 'Extensionless PHP must not silently escape independent coverage.' );
 	}
 } finally {
-	foreach ( array( $probe_file, $excluded_config, $probe_config, $root_probe, $extensionless_probe ) as $probe_path ) {
+	foreach ( array( $probe_file, $excluded_config, $ignored_config, $probe_config, $root_probe, $extensionless_probe ) as $probe_path ) {
 		if ( is_file( $probe_path ) ) {
 			// phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- Remove only a disposable file created by this fixture.
 			unlink( $probe_path );
