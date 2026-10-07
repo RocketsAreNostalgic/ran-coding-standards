@@ -562,7 +562,7 @@ $maintained_files                       = static function ( string $root ): arra
 		if ( 'php' === $file->getExtension() ) {
 			$files[] = $file->getPathname();
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Read local repository or fixture bytes without requiring a WordPress runtime.
-		} elseif ( 0 === strcasecmp( 'php', $file->getExtension() ) || preg_match( '/^(?:#![^\n]*\n)?\s*<\?(?:php\b|=)/i', (string) file_get_contents( $file->getPathname(), false, null, 0, 512 ) ) ) {
+		} elseif ( in_array( strtolower( $file->getExtension() ), array( 'php', 'phtml' ), true ) || preg_match( in_array( strtolower( $file->getExtension() ), array( '', 'inc', 'html', 'htm' ), true ) ? '/<\?(?:php\b|=)/i' : '/^(?:#![^\n]*\n)?\s*<\?(?:php\b|=)/i', (string) file_get_contents( $file->getPathname(), false, null, 0, in_array( strtolower( $file->getExtension() ), array( '', 'inc', 'html', 'htm' ), true ) ? PHP_INT_MAX : 512 ) ) ) {
 			throw new RuntimeException( 'Review PHP with a nonstandard extension: ' . $file->getPathname() );
 		}
 	}
@@ -650,16 +650,33 @@ try {
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Encode machine-readable fixture data or CLI diagnostics without WordPress helpers.
 		throw new RuntimeException( 'An excluded maintained file must fail independent coverage despite clean analysis: ' . json_encode( array( $analysis_status, array_values( array_diff( $maintained_files( $probe_root ), $analysed_files ) ) ) ) );
 	}
-	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Write exact disposable fixture or configuration bytes in this CLI-only test.
-	file_put_contents( $extensionless_probe, "#!/usr/bin/env php\n<?php\n" );
-	$nonstandard_rejected = false;
-	try {
-		$maintained_files( $probe_root );
-	} catch ( RuntimeException $error ) {
-		$nonstandard_rejected = 0 === strpos( $error->getMessage(), 'Review PHP with a nonstandard extension:' );
+	foreach ( array( 'entrypoint', 'template.phtml', 'template.PHTML', 'template.inc', 'template.html', 'template.htm' ) as $name ) {
+		$extensionless_probe = $probe_root . '/' . $name;
+		foreach ( array( "#!/usr/bin/env php\n", "<main>Template</main>\n", str_repeat( '<p>Template</p>', 100 ) ) as $preamble ) {
+			foreach ( array( 'echo 1;', 'function ( {' ) as $body ) {
+				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Both valid and malformed mixed templates must require deliberate coverage regardless of preamble length.
+				file_put_contents( $extensionless_probe, $preamble . '<?php ' . $body );
+				$nonstandard_rejected = false;
+				try {
+					$maintained_files( $probe_root );
+				} catch ( RuntimeException $error ) {
+					$nonstandard_rejected = 0 === strpos( $error->getMessage(), 'Review PHP with a nonstandard extension:' );
+				}
+				if ( ! $nonstandard_rejected ) {
+					throw new RuntimeException( 'Mixed PHP templates must not silently escape independent coverage.' );
+				}
+			}
+		}
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- Remove only the current inert template fixture.
+		unlink( $extensionless_probe );
 	}
-	if ( ! $nonstandard_rejected ) {
-		throw new RuntimeException( 'Extensionless PHP must not silently escape independent coverage.' );
+	foreach ( array( 'example.md', 'example.json', 'example.sh' ) as $name ) {
+		$extensionless_probe = $probe_root . '/' . $name;
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Non-PHP documents and shell examples retain their existing classification.
+		file_put_contents( $extensionless_probe, 'Example: <?php echo 1;' );
+		$maintained_files( $probe_root );
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- Remove only the current non-PHP fixture.
+		unlink( $extensionless_probe );
 	}
 } finally {
 	foreach ( array( $probe_file, $excluded_config, $ignored_config, $probe_config, $root_probe, $extensionless_probe ) as $probe_path ) {
