@@ -42,6 +42,11 @@ $repository_namespace_pattern = '/^(?:RAN|RocketsAreNostalgic)\\\\[A-Za-z_][A-Za
 $inspected_rulesets           = array();
 
 $find_selector_violation = static function ( $document, string $standard ): ?string {
+	$conditional_nodes = $document->xpath( '//*[@phpcs-only or @phpcbf-only]' );
+	if ( false === $conditional_nodes || array() !== $conditional_nodes ) {
+		return sprintf( '%s conditionally changes checker or fixer rules.', $standard );
+	}
+
 	$selector_nodes = $document->xpath( '//file | //include-pattern | //exclude-pattern' );
 	if ( false === $selector_nodes ) {
 		return sprintf( 'Could not inspect file selectors in %s.', $standard );
@@ -655,11 +660,32 @@ fwrite( STDOUT, "All maintained PHP is directly analysed at level five or strong
 
 // The local source profile is independent of exported consumer rules and their fixture payloads.
 $source_profile_is_scoped = static function ( SimpleXMLElement $document ): bool {
-	return array() !== $document->xpath( '//include-pattern | //rule//exclude-pattern | //rule/exclude | //*[@phpcs-only or @phpcbf-only]' );
+	$exclusions = $document->xpath( '//exclude-pattern' );
+	if ( false === $exclusions || 1 !== count( $exclusions ) ) {
+		return true;
+	}
+	$vendor = $document->xpath( '/ruleset/exclude-pattern' );
+	if ( false === $vendor || 1 !== count( $vendor ) || '^vendor/' !== (string) $vendor[0]
+		|| 1 !== count( $vendor[0]->attributes() ) || 'relative' !== (string) $vendor[0]['type']
+	) {
+		return true;
+	}
+	return array() !== $document->xpath( '//include-pattern | //rule/exclude | //*[@phpcs-only or @phpcbf-only]' );
 };
 $source_profile           = simplexml_load_file( $root . '/.phpcs.xml', 'SimpleXMLElement', LIBXML_NONET );
 if ( false === $source_profile || $source_profile_is_scoped( $source_profile ) ) {
 	throw new RuntimeException( 'Local source rules must not acquire conditional or path-scoped exceptions.' );
+}
+foreach ( array(
+	str_replace( '</ruleset>', '<exclude-pattern>*/not-yet-created/*</exclude-pattern></ruleset>', $source_profile->asXML() ),
+	str_replace( '^vendor/', 'vendor/', $source_profile->asXML() ),
+	str_replace( 'type="relative"', 'type="absolute"', $source_profile->asXML() ),
+	str_replace( '<exclude-pattern type="relative">^vendor/</exclude-pattern>', '', $source_profile->asXML() ),
+) as $mutant_xml ) {
+	$document = simplexml_load_string( $mutant_xml, 'SimpleXMLElement', LIBXML_NONET );
+	if ( false === $document || ! $source_profile_is_scoped( $document ) ) {
+		throw new RuntimeException( 'Only the exact reviewed root vendor exclusion may survive, including before a future file exists.' );
+	}
 }
 require_once $root . '/vendor/squizlabs/php_codesniffer/autoload.php';
 // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Read the canonical checker/fixer contract as local JSON data.
@@ -734,6 +760,42 @@ try {
 		}
 		if ( false === strpos( $selector, 'phpcbf-only' ) && ! in_array( $json_code, $inspect_source( $path_probe, $root . '/src/adjacent-future.php', $selector_probe ), true ) ) {
 			throw new RuntimeException( 'The targeted selector must leave the adjacent path checked.' );
+		}
+	}
+	foreach ( array( false, true ) as $exclude_fixture ) {
+		$mutant_xml = $exclude_fixture
+			? str_replace( '</ruleset>', '<exclude-pattern>*/native.php</exclude-pattern></ruleset>', $source_profile->asXML() )
+			: $source_profile->asXML();
+		$document   = simplexml_load_string( $mutant_xml, 'SimpleXMLElement', LIBXML_NONET );
+		if ( false === $document || $exclude_fixture !== $source_profile_is_scoped( $document ) ) {
+			throw new RuntimeException( 'The root exclusion mutation must be rejected independently of current selection.' );
+		}
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Create only the disposable local ruleset to prove actual file-selection behavior.
+		file_put_contents( $root . '/' . $selector_probe, $mutant_xml );
+		$selection_runner         = new PHP_CodeSniffer\Runner();
+		$selection_runner->config = new PHP_CodeSniffer\Config( array( '--standard=' . $root . '/' . $selector_probe, $fixtures['native'], $fixtures['valid'] ) );
+		$selection_runner->init();
+		$selected = iterator_to_array( new PHP_CodeSniffer\Files\FileList( $selection_runner->config, $selection_runner->ruleset ) );
+		if ( array_key_exists( $fixtures['native'], $selected ) === $exclude_fixture || ! array_key_exists( $fixtures['valid'], $selected ) ) {
+			throw new RuntimeException( 'The real checker must omit only the targeted file when the root exclusion is added.' );
+		}
+	}
+	// Exercise the same predicate used by the recursive inspector on exported ancestry.
+	$exported_profile = simplexml_load_file( $root . '/RANWordPress/ruleset.xml', 'SimpleXMLElement', LIBXML_NONET );
+	if ( false === $exported_profile ) {
+		throw new RuntimeException( 'Could not load the exported ancestor for conditional controls.' );
+	}
+	foreach ( array( '', ' phpcbf-only="true"', ' phpcs-only="false"', ' phpcs-only="true"', ' phpcbf-only="false"' ) as $condition ) {
+		$mutant_xml = str_replace( '<rule ref="WordPress-Extra">', '<rule ref="WordPress-Extra"' . $condition . '>', $exported_profile->asXML() );
+		$document   = simplexml_load_string( $mutant_xml, 'SimpleXMLElement', LIBXML_NONET );
+		if ( false === $document || ( '' === $condition ) !== ( null === $find_selector_violation( $document, 'exported ancestor control' ) ) ) {
+			throw new RuntimeException( 'Recursive exported inspection must reject checker/fixer conditional attributes.' );
+		}
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Write an inert copy of the exported ancestor; never alter the exported standard.
+		file_put_contents( $root . '/' . $selector_probe, $mutant_xml );
+		$hidden = in_array( $condition, array( ' phpcbf-only="true"', ' phpcs-only="false"', ' phpcbf-only="false"' ), true );
+		if ( in_array( $json_code, $inspect_source( $path_probe, $root . '/src/unreviewed-future.php', $selector_probe ), true ) === $hidden ) {
+			throw new RuntimeException( 'The exported conditional must demonstrate its actual checker diagnostic effect.' );
 		}
 	}
 } finally {
