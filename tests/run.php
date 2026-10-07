@@ -559,10 +559,12 @@ $maintained_files                       = static function ( string $root ): arra
 		if ( ! $file->isFile() ) {
 			continue;
 		}
+		$extension = strtolower( $file->getExtension() );
+		$template  = in_array( $extension, array( '', 'inc', 'html', 'htm' ), true );
 		if ( 'php' === $file->getExtension() ) {
 			$files[] = $file->getPathname();
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Read local repository or fixture bytes without requiring a WordPress runtime.
-		} elseif ( in_array( strtolower( $file->getExtension() ), array( 'php', 'phtml' ), true ) || preg_match( in_array( strtolower( $file->getExtension() ), array( '', 'inc', 'html', 'htm' ), true ) ? '/<\?(?:php\b|=)/i' : '/^(?:#![^\n]*\n)?\s*<\?(?:php\b|=)/i', (string) file_get_contents( $file->getPathname(), false, null, 0, in_array( strtolower( $file->getExtension() ), array( '', 'inc', 'html', 'htm' ), true ) ? PHP_INT_MAX : 512 ) ) ) {
+		} elseif ( in_array( $extension, array( 'php', 'phtml' ), true ) || preg_match( $template ? '/<\?(?:php\b|=)/i' : '/^(?:#![^\n]*\n)?\s*<\?(?:php\b|=)/i', (string) ( $template ? file_get_contents( $file->getPathname() ) : file_get_contents( $file->getPathname(), false, null, 0, 512 ) ) ) ) {
 			throw new RuntimeException( 'Review PHP with a nonstandard extension: ' . $file->getPathname() );
 		}
 	}
