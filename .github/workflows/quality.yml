@@ -81,13 +81,19 @@ jobs:
             "$consumer/vendor/bin/phpcs" -e --standard="$standard"
           done
 
+      - name: Verify workflow lint failure propagation
+        run: bash tests/lint-workflow.sh
+
       - name: Lint repository PHP
         shell: bash
         run: |
           set -euo pipefail
+          php_files=$(mktemp)
+          trap 'rm -f "$php_files"' EXIT
+          find . -path './vendor' -prune -o -type f -name '*.php' -print0 > "$php_files"
           while IFS= read -r -d '' file; do
             php -l "$file" >/dev/null
-          done < <(find . -path './vendor' -prune -o -type f -name '*.php' -print0)
+          done < "$php_files"
 
   quality:
     name: quality
