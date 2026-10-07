@@ -554,17 +554,30 @@ $maintained_files                       = static function ( string $root ): arra
 			return ! in_array( $file->getPathname(), array( $root . '/vendor', $root . '/.git' ), true );
 		}
 	);
-	$files  = array();
+	// Ignore only a genuine leading XML declaration, never XML-like PHP or later tags.
+	$xml_declaration = '~\A(?:\xEF\xBB\xBF)?<\?xml[ \t\r\n]+version[ \t\r\n]*=[ \t\r\n]*(?:"1\.[01]"|\'1\.[01]\')(?:[ \t\r\n]+encoding[ \t\r\n]*=[ \t\r\n]*(?:"[A-Za-z][A-Za-z0-9._-]*"|\'[A-Za-z][A-Za-z0-9._-]*\'))?(?:[ \t\r\n]+standalone[ \t\r\n]*=[ \t\r\n]*(?:"(?:yes|no)"|\'(?:yes|no)\'))?[ \t\r\n]*\?>~';
+	$files           = array();
 	foreach ( new RecursiveIteratorIterator( $filter ) as $file ) {
 		if ( ! $file->isFile() ) {
 			continue;
 		}
 		$extension = strtolower( $file->getExtension() );
-		$template  = in_array( $extension, array( '', 'inc', 'html', 'htm' ), true );
 		if ( 'php' === $file->getExtension() ) {
 			$files[] = $file->getPathname();
+			continue;
+		}
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Read local repository or fixture bytes without requiring a WordPress runtime.
-		} elseif ( in_array( $extension, array( 'php', 'phtml' ), true ) || preg_match( $template ? '/<\?(?:php\b|=)/i' : '/^(?:#![^\n]*\n)?\s*<\?(?:php\b|=)/i', (string) ( $template ? file_get_contents( $file->getPathname() ) : file_get_contents( $file->getPathname(), false, null, 0, 512 ) ) ) ) {
+		$contents = file_get_contents( $file->getPathname() );
+		if ( false === $contents ) {
+			throw new RuntimeException( 'Cannot inspect maintained candidate.' );
+		}
+		// Quoted examples in Markdown, valid JSON and declared Bash scripts remain inert.
+		$inert    = 'md' === $extension
+			|| ( 'json' === $extension && null !== json_decode( $contents ) && JSON_ERROR_NONE === json_last_error() )
+			|| ( 'sh' === $extension && 1 === preg_match( '~\A#!(?:/usr/bin/env[ \t]+bash|/bin/bash)(?:[ \t][^\r\n]*)?\r?\n~', $contents ) );
+		$contents = preg_replace( $xml_declaration, '', $contents ) ?? $contents;
+		$opening  = ! $inert ? '/<\?/' : '/\A(?:\xEF\xBB\xBF)?(?:#![^\n]*\n)?\s*<\?/';
+		if ( in_array( $extension, array( 'php', 'phtml' ), true ) || preg_match( $opening, $contents ) ) {
 			throw new RuntimeException( 'Review PHP with a nonstandard extension: ' . $file->getPathname() );
 		}
 	}
@@ -677,12 +690,12 @@ try {
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Encode machine-readable fixture data or CLI diagnostics without WordPress helpers.
 		throw new RuntimeException( 'An excluded maintained file must fail independent coverage despite clean analysis: ' . json_encode( array( $analysis_status, array_values( array_diff( $maintained_files( $probe_root ), $analysed_files ) ) ) ) );
 	}
-	foreach ( array( 'entrypoint', 'template.phtml', 'template.PHTML', 'template.inc', 'template.html', 'template.htm' ) as $name ) {
+	foreach ( array( 'entrypoint', 'template.phtml', 'template.PHTML', 'template.inc', 'template.html', 'template.htm', 'template.tpl', 'template.custom', 'undeclared.sh' ) as $name ) {
 		$extensionless_probe = $probe_root . '/' . $name;
 		foreach ( array( "#!/usr/bin/env php\n", "<main>Template</main>\n", str_repeat( '<p>Template</p>', 100 ) ) as $preamble ) {
-			foreach ( array( 'echo 1;', 'function ( {' ) as $body ) {
+			foreach ( array( '<?php echo 1;', '<?php function ( {', '<? echo 1;', '<?xmlfoo echo 1;', '<?xml version="1.0"?><root><? echo 1;</root>' ) as $body ) {
 				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Both valid and malformed mixed templates must require deliberate coverage regardless of preamble length.
-				file_put_contents( $extensionless_probe, $preamble . '<?php ' . $body );
+				file_put_contents( $extensionless_probe, $preamble . $body );
 				$nonstandard_rejected = false;
 				try {
 					$maintained_files( $probe_root );
@@ -697,10 +710,18 @@ try {
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- Remove only the current inert template fixture.
 		unlink( $extensionless_probe );
 	}
+	foreach ( array( 'template.inc', 'template.xml' ) as $name ) {
+		$extensionless_probe = $probe_root . '/' . $name;
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- A genuine leading XML declaration alone is inert; quoted PHP documentation is tested separately.
+		file_put_contents( $extensionless_probe, '<?xml version="1.0" encoding="UTF-8"?><root/>' );
+		$maintained_files( $probe_root );
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- Remove only the current XML fixture.
+		unlink( $extensionless_probe );
+	}
 	foreach ( array( 'example.md', 'example.json', 'example.sh' ) as $name ) {
 		$extensionless_probe = $probe_root . '/' . $name;
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Non-PHP documents and shell examples retain their existing classification.
-		file_put_contents( $extensionless_probe, 'Example: <?php echo 1;' );
+		file_put_contents( $extensionless_probe, 'example.sh' === $name ? "#!/bin/bash\n# Example: <?php echo 1;" : '"Example: <?php echo 1;"' );
 		$maintained_files( $probe_root );
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- Remove only the current non-PHP fixture.
 		unlink( $extensionless_probe );
