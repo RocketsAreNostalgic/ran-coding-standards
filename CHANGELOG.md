@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/RocketsAreNostalgic/ran-coding-standards/compare/v1.0.1...v1.0.2) (2026-10-07)
+
+
+### Bug Fixes
+
+* **ci:** propagate PHP file discovery failures ([#18](https://github.com/RocketsAreNostalgic/ran-coding-standards/issues/18)) ([121fce1](https://github.com/RocketsAreNostalgic/ran-coding-standards/commit/121fce13fc343c71ccb3f87c147a28d9236fc061))
+
 ## [1.0.1](https://github.com/RocketsAreNostalgic/ran-coding-standards/compare/v1.0.0...v1.0.1) (2026-10-03)
 
 
