@@ -1,0 +1,13 @@
+parameters:
+    level: 5
+    treatPhpDocTypesAsCertain: false
+    paths:
+        - .
+    excludePaths:
+        analyseAndScan:
+            - vendor
+    tmpDir: vendor/.phpstan-cache
+    bootstrapFiles:
+        - vendor/squizlabs/php_codesniffer/autoload.php
+    scanDirectories:
+        - vendor/phpcsstandards/phpcsutils

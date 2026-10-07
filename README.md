@@ -204,6 +204,54 @@ in diagnostics. Safe ASCII identifiers remain readable in diagnostics. Genuine
 PHP magic methods retain their exemption; other double-underscore prefixes
 remain reserved.
 
+The package's own `composer analyze` runs locked PHPStan at level 5 over the
+repository root, including the custom sniff and all maintained test programs.
+Only the root dependency directory is excluded; new PHP files enter automatically.
+The existing test runner independently compares maintained-file discovery with
+the analyzer's actual CLI file trace, checks the effective level, and exercises
+new root/nested files and an exclusion that would otherwise leave clean analysis.
+Nonstandard PHP extensions require deliberate scope review rather than silently
+escaping discovery. No analysis baselines or maintained-file exemptions are added.
+
+Caller-provided include variables have explicit PHPDoc contracts. PHPDoc types
+are not treated as certain, preserving defensive SimpleXML failure checks.
+PHPCS's real autoloader and locked PHPCSUtils supply dependency symbols without
+claiming those dependencies are directly analyzed. PHPStan remains a development
+dependency and does not install transitively in consumers. This quality-only
+change does not alter or release any exported sniff or ruleset.
+
+## Package source profile
+
+The repository-local `.phpcs.xml` checks every maintained PHP file using the
+existing library and owned-method profiles, with the declared PHP 7.4 floor.
+`composer standards` and `composer standards:fix` share that root scope and
+ruleset; only the root `vendor/` dependency tree is excluded. This configuration
+is not an exported consumer standard and does not alter any exported ruleset.
+
+The three CLI test programs retain a file-local exemption only for the exact
+global-variable prefix diagnostic: their local state lives in an isolated CLI
+process. Snake-case variables, declarations, methods and future files stay
+checked. Owned local names were migrated without changing embedded fixture
+identities, API callback names or PHPCS diagnostic expectations.
+
+Occurrence-specific exceptions have these concrete boundaries:
+
+| Boundary | Reason |
+| --- | --- |
+| Native filesystem and pipes | Read repository bytes, create/remove private disposable fixtures, and exchange inert checker input without loading WordPress. |
+| Process and JSON operations | Execute the selected CLI checkers/isolated Composer proof and encode machine-readable fixture evidence. |
+| CLI termination and cleanup | Integer `exit` arguments are status codes, not rendered output; suppressed shutdown cleanup warnings must not replace an earlier test failure. |
+| Literal diagnostic data | Two hexadecimal strings are expected identifier bytes, never arithmetic operands. |
+
+Every exception uses an exact diagnostic at its occurrence. The existing tests
+read actual source annotations and append outside-scope violations through the
+locked full local profile; changing to a broad suppression fails independently.
+The retained CLI variable allowance cannot hide new declarations or snake-case
+violations. Effective file selection, new root/nested paths, inherited owned
+methods and matching canonical check/fix commands have regression controls.
+This candidate requires review of these concrete reasons; a comment alone does
+not establish wider exception acceptance.
+
 ## Releases
 
 Release Please manages releases through the shared Profile A workflow. See

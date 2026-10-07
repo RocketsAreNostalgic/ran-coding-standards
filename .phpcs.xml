@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<ruleset name="RAN Coding Standards Source">
+    <description>Owned standalone quality-tool source, separate from exported consumer rules.</description>
+    <file>.</file>
+    <exclude-pattern type="relative">^vendor/</exclude-pattern>
+    <arg name="extensions" value="php"/>
+    <arg value="sp"/>
+    <config name="testVersion" value="7.4-"/>
+    <rule ref="RANWordPressLibrary"/>
+    <rule ref="RANOwnedMethods"/>
+    <rule ref="WordPress.NamingConventions.PrefixAllGlobals">
+        <properties>
+            <property name="prefixes" type="array">
+                <element value="RANOwnedMethods"/>
+                <element value="ran_coding_standards"/>
+            </property>
+        </properties>
+    </rule>
+</ruleset>

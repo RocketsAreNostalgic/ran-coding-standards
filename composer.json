@@ -16,7 +16,8 @@
     "require-dev": {
         "phpcompatibility/php-compatibility": "10.0.0-alpha2",
         "phpcompatibility/phpcompatibility-paragonie": "2.0.0-alpha2",
-        "phpcompatibility/phpcompatibility-wp": "3.0.0-alpha2"
+        "phpcompatibility/phpcompatibility-wp": "3.0.0-alpha2",
+        "phpstan/phpstan": "^2.2.16"
     },
     "config": {
         "allow-plugins": {
@@ -33,8 +34,13 @@
         "test": "@php tests/run.php",
         "check": [
             "@validate:strict",
+            "@standards",
             "@test",
-            "@test:consumer-install"
-        ]
+            "@test:consumer-install",
+            "@analyze"
+        ],
+        "analyze": "phpstan analyse --configuration=phpstan.neon --no-progress",
+        "standards": "phpcs --standard=.phpcs.xml --report=summary",
+        "standards:fix": "phpcbf --standard=.phpcs.xml --report=summary"
     }
 }
