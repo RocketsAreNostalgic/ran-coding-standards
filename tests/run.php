@@ -597,6 +597,9 @@ $assert_analysis_parameters = static function ( string $configuration ) use ( $r
 	if ( 0 !== $parameter_status || 5 > (int) $parameters['level'] ) {
 		throw new RuntimeException( 'The effective PHPStan level must remain at least five.' );
 	}
+	if ( 70400 !== $parameters['phpVersion'] ) {
+		throw new RuntimeException( 'Local PHPStan compatibility target must remain PHP 7.4.' );
+	}
 	if ( array() !== $parameters['ignoreErrors'] ) {
 		throw new RuntimeException( 'PHPStan ignored errors need explicit review.' );
 	}
@@ -643,6 +646,28 @@ try {
 		}
 		if ( ! $ignored_error_rejected ) {
 			throw new RuntimeException( 'Effective diagnostic suppression must fail independently of clean analysis.' );
+		}
+	}
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Write an inert newer native API whose compatibility diagnostic must survive the package's PHP 7.4 target.
+	file_put_contents( $probe_file, "<?php\nfunction ran_compatibility_probe( array \$values ): bool { return array_is_list( \$values ); }\n" );
+	foreach ( array( 70400, 80100 ) as $version ) {
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Exercise effective compatibility settings inherited through a disposable configuration.
+		file_put_contents( $excluded_config, "includes:\n    - " . $probe_config . "\nparameters:\n    phpVersion: " . $version . "\n" );
+		list($analysis_status, $analysed_files, $analysis_report) = $run_analysis( $excluded_config );
+		if ( ( 70400 === $version ? 1 : 0 ) !== $analysis_status || $maintained_files( $probe_root ) !== $analysed_files ) {
+			throw new RuntimeException( 'A raised PHPStan target must reproduce the lost compatibility diagnostic.' );
+		}
+		if ( 70400 === $version && ! in_array( 'function.notFound', array_column( $analysis_report['files'][ $probe_file ]['messages'], 'identifier' ), true ) ) {
+			throw new RuntimeException( 'The supported PHP target must diagnose the newer native API.' );
+		}
+		$target_rejected = false;
+		try {
+			$assert_analysis_parameters( $excluded_config );
+		} catch ( RuntimeException $error ) {
+			$target_rejected = 'Local PHPStan compatibility target must remain PHP 7.4.' === $error->getMessage();
+		}
+		if ( ( 70400 !== $version ) !== $target_rejected ) {
+			throw new RuntimeException( 'Only the supported PHPStan compatibility target may pass the guard.' );
 		}
 	}
 	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Write exact disposable fixture or configuration bytes in this CLI-only test.
@@ -705,6 +730,12 @@ fwrite( STDOUT, "All maintained PHP is directly analysed at level five or strong
 
 // The local source profile is independent of exported consumer rules and their fixture payloads.
 $source_profile_is_scoped = static function ( SimpleXMLElement $document ): bool {
+	$configs = $document->xpath( '//config' );
+	if ( false === $configs || 1 !== count( $configs ) || 2 !== count( $configs[0]->attributes() )
+		|| 'testVersion' !== (string) $configs[0]['name'] || '7.4-' !== (string) $configs[0]['value']
+	) {
+		return true;
+	}
 	$exclusions = $document->xpath( '//exclude-pattern' );
 	if ( false === $exclusions || 1 !== count( $exclusions ) ) {
 		return true;
@@ -719,9 +750,12 @@ $source_profile_is_scoped = static function ( SimpleXMLElement $document ): bool
 };
 $source_profile           = simplexml_load_file( $root . '/.phpcs.xml', 'SimpleXMLElement', LIBXML_NONET );
 if ( false === $source_profile || $source_profile_is_scoped( $source_profile ) ) {
-	throw new RuntimeException( 'Local source rules must not acquire conditional or path-scoped exceptions.' );
+	throw new RuntimeException( 'Local source rules must preserve PHP 7.4 and reject conditional or path-scoped exceptions.' );
 }
 foreach ( array(
+	str_replace( 'value="7.4-"', 'value="8.3-"', $source_profile->asXML() ),
+	str_replace( '<config name="testVersion" value="7.4-"/>', '', $source_profile->asXML() ),
+	str_replace( '</ruleset>', '<config name="testVersion" value="7.4-"/></ruleset>', $source_profile->asXML() ),
 	str_replace( '</ruleset>', '<exclude-pattern>*/not-yet-created/*</exclude-pattern></ruleset>', $source_profile->asXML() ),
 	str_replace( '^vendor/', 'vendor/', $source_profile->asXML() ),
 	str_replace( 'type="relative"', 'type="absolute"', $source_profile->asXML() ),
@@ -729,7 +763,7 @@ foreach ( array(
 ) as $mutant_xml ) {
 	$document = simplexml_load_string( $mutant_xml, 'SimpleXMLElement', LIBXML_NONET );
 	if ( false === $document || ! $source_profile_is_scoped( $document ) ) {
-		throw new RuntimeException( 'Only the exact reviewed root vendor exclusion may survive, including before a future file exists.' );
+		throw new RuntimeException( 'Only the reviewed PHP target and root vendor exclusion may survive, including before a future file exists.' );
 	}
 }
 require_once $root . '/vendor/squizlabs/php_codesniffer/autoload.php';
@@ -786,6 +820,19 @@ if ( ! in_array( $json_code, $inspect_source( $path_probe, $root . '/src/unrevie
 	throw new RuntimeException( 'A future source path must enforce the native JSON diagnostic.' );
 }
 try {
+	$compatibility_code  = 'PHPCompatibility.FunctionUse.NewFunctions.json_validateFound';
+	$compatibility_probe = "<?php json_validate( 'null' );";
+	if ( ! in_array( $compatibility_code, $inspect_source( $compatibility_probe, $root . '/tests/compatibility.php' ), true ) ) {
+		throw new RuntimeException( 'The local PHP 7.4 profile must diagnose the newer native API.' );
+	}
+	$mutant_xml = str_replace( 'value="7.4-"', 'value="8.3-"', $source_profile->asXML() );
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Reproduce lost compatibility diagnostics only in the disposable local ruleset.
+	file_put_contents( $root . '/' . $selector_probe, $mutant_xml );
+	if ( in_array( $compatibility_code, $inspect_source( $compatibility_probe, $root . '/tests/compatibility.php', $selector_probe ), true )
+		|| ! $source_profile_is_scoped( simplexml_load_string( $mutant_xml, 'SimpleXMLElement', LIBXML_NONET ) )
+	) {
+		throw new RuntimeException( 'A raised local compatibility target must hide the diagnostic but fail the guard.' );
+	}
 	foreach ( array(
 		'<rule ref="WordPress.WP.AlternativeFunctions.json_encode_json_encode"><include-pattern>^(?!*unreviewed-future[.]php)</include-pattern></rule>',
 		'<rule ref="WordPress.WP.AlternativeFunctions.json_encode_json_encode"><exclude-pattern>*/src/unreviewed-future.php</exclude-pattern></rule>',
