@@ -607,11 +607,14 @@ $assert_analysis_parameters = static function ( string $configuration ) use ( $r
 	// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- Read the locked analyzer's effective configuration, including inherited suppression settings.
 	exec( escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( $root . '/vendor/bin/phpstan' ) . ' dump-parameters --json --configuration=' . escapeshellarg( $configuration ), $parameters, $parameter_status );
 	$parameters = json_decode( implode( "\n", $parameters ), true, 512, JSON_THROW_ON_ERROR );
-	if ( 0 !== $parameter_status || 5 > (int) $parameters['level'] ) {
-		throw new RuntimeException( 'The effective PHPStan level must remain at least five.' );
+	if ( 0 !== $parameter_status || 8 > (int) $parameters['level'] ) {
+		throw new RuntimeException( 'The effective PHPStan level must remain at least eight.' );
 	}
 	if ( 70400 !== $parameters['phpVersion'] ) {
 		throw new RuntimeException( 'Local PHPStan compatibility target must remain PHP 7.4.' );
+	}
+	if ( false !== $parameters['treatPhpDocTypesAsCertain'] ) {
+		throw new RuntimeException( 'Defensive PHPDoc checks must remain uncertain.' );
 	}
 	if ( array() !== $parameters['ignoreErrors'] ) {
 		throw new RuntimeException( 'PHPStan ignored errors need explicit review.' );
@@ -661,8 +664,40 @@ try {
 			throw new RuntimeException( 'Effective diagnostic suppression must fail independently of clean analysis.' );
 		}
 	}
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- An actual nullable-method diagnostic distinguishes the Level 8 gate from a clean Level 7 run.
+	file_put_contents( $probe_file, '<?php function ran_nullable_analysis_probe(?DateTimeImmutable $value): int { return $value->getTimestamp(); } echo ran_nullable_analysis_probe(null);' );
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Override only the private fixture level to prove its effective downgrade is independently rejected.
+	file_put_contents( $excluded_config, "includes:\n    - " . $probe_config . "\nparameters:\n    level: 7\n" );
+	list($analysis_status, $analysed_files, $analysis_report) = $run_analysis( $excluded_config );
+	if ( 0 !== $analysis_status || $maintained_files( $probe_root ) !== $analysed_files || 0 !== $analysis_report['totals']['file_errors'] ) {
+		throw new RuntimeException( 'The nullable probe must be clean at Level 7 with the same maintained population.' );
+	}
+	$downgrade_rejected = false;
+	try {
+		$assert_analysis_parameters( $excluded_config );
+	} catch ( RuntimeException $error ) {
+		$downgrade_rejected = 'The effective PHPStan level must remain at least eight.' === $error->getMessage();
+	}
+	if ( ! $downgrade_rejected ) {
+		throw new RuntimeException( 'An inherited Level 7 downgrade must fail the effective configuration guard.' );
+	}
+	list($analysis_status, $analysed_files, $analysis_report) = $run_analysis( $probe_config );
+	if ( 1 !== $analysis_status || $maintained_files( $probe_root ) !== $analysed_files || 1 !== $analysis_report['totals']['file_errors'] || array( 'method.nonObject' ) !== array_column( $analysis_report['files'][ $probe_file ]['messages'], 'identifier' ) ) {
+		throw new RuntimeException( 'The real Level 8 runner must report the nullable-method diagnostic.' );
+	}
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Protect defensive producer checks against an inherited PHPDoc-trust relaxation.
+	file_put_contents( $excluded_config, "includes:\n    - " . $probe_config . "\nparameters:\n    treatPhpDocTypesAsCertain: true\n" );
+	$trust_relaxation_rejected = false;
+	try {
+		$assert_analysis_parameters( $excluded_config );
+	} catch ( RuntimeException $error ) {
+		$trust_relaxation_rejected = 'Defensive PHPDoc checks must remain uncertain.' === $error->getMessage();
+	}
+	if ( ! $trust_relaxation_rejected ) {
+		throw new RuntimeException( 'An inherited PHPDoc-trust relaxation must fail the effective configuration guard.' );
+	}
 	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Write an inert newer native API whose compatibility diagnostic must survive the package's PHP 7.4 target.
-	file_put_contents( $probe_file, "<?php\nfunction ran_compatibility_probe( array \$values ): bool { return array_is_list( \$values ); }\n" );
+	file_put_contents( $probe_file, "<?php\n/** @param array<array-key,mixed> \$values */ function ran_compatibility_probe( array \$values ): bool { return array_is_list( \$values ); }\n" );
 	foreach ( array( 70400, 80100 ) as $version ) {
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Exercise effective compatibility settings inherited through a disposable configuration.
 		file_put_contents( $excluded_config, "includes:\n    - " . $probe_config . "\nparameters:\n    phpVersion: " . $version . "\n" );
@@ -747,7 +782,7 @@ try {
 	}
 }
 // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime.
-fwrite( STDOUT, "All maintained PHP is directly analysed at level five or stronger; future paths and exclusions are guarded.\n" );
+fwrite( STDOUT, "All maintained PHP is directly analysed at level eight or stronger; future paths and exclusions are guarded.\n" );
 
 // The local source profile is independent of exported consumer rules and their fixture payloads.
 $source_profile_is_scoped = static function ( SimpleXMLElement $document ): bool {
