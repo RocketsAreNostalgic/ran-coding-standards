@@ -204,7 +204,7 @@ in diagnostics. Safe ASCII identifiers remain readable in diagnostics. Genuine
 PHP magic methods retain their exemption; other double-underscore prefixes
 remain reserved.
 
-The package's own `composer analyze` runs locked PHPStan at level 5 over the
+The package's own `composer analyze` runs locked PHPStan at level 8 over the
 repository root, including the custom sniff and all maintained test programs.
 Only the root dependency directory is excluded; new PHP files enter automatically.
 The existing test runner independently compares maintained-file discovery with

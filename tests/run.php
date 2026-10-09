@@ -48,7 +48,7 @@ $find_selector_violation = static function ( $document, string $standard ): ?str
 	}
 
 	$selector_nodes = $document->xpath( '//file | //include-pattern | //exclude-pattern' );
-	if ( false === $selector_nodes ) {
+	if ( ! is_array( $selector_nodes ) ) {
 		return sprintf( 'Could not inspect file selectors in %s.', $standard );
 	}
 
@@ -63,7 +63,7 @@ $find_selector_violation = static function ( $document, string $standard ): ?str
 	}
 
 	$selector_arg_nodes = $document->xpath( '//arg[@name]' );
-	if ( false === $selector_arg_nodes ) {
+	if ( ! is_array( $selector_arg_nodes ) ) {
 		return sprintf( 'Could not inspect selector arguments in %s.', $standard );
 	}
 
@@ -96,7 +96,7 @@ $inspect_ruleset = static function ( string $standard ) use ( &$inspect_ruleset,
 	}
 
 	$rule_nodes = $document->xpath( '/ruleset/rule[@ref]' );
-	if ( false === $rule_nodes ) {
+	if ( ! is_array( $rule_nodes ) ) {
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime.
 		fwrite( STDERR, sprintf( "Could not inspect active rules in %s.\n", $standard ) );
 		exit( 1 );
@@ -116,7 +116,7 @@ $inspect_ruleset = static function ( string $standard ) use ( &$inspect_ruleset,
 	}
 
 	$setting_nodes = $document->xpath( '//config[@name] | //property[@name]' );
-	if ( false === $setting_nodes ) {
+	if ( ! is_array( $setting_nodes ) ) {
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime.
 		fwrite( STDERR, sprintf( "Could not inspect settings in %s.\n", $standard ) );
 		exit( 1 );
@@ -135,7 +135,7 @@ $inspect_ruleset = static function ( string $standard ) use ( &$inspect_ruleset,
 	}
 
 	$value_nodes = $document->xpath( '//config[@value] | //property[@value] | //element[@value]' );
-	if ( false === $value_nodes ) {
+	if ( ! is_array( $value_nodes ) ) {
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime.
 		fwrite( STDERR, sprintf( "Could not inspect values in %s.\n", $standard ) );
 		exit( 1 );
@@ -607,11 +607,14 @@ $assert_analysis_parameters = static function ( string $configuration ) use ( $r
 	// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- Read the locked analyzer's effective configuration, including inherited suppression settings.
 	exec( escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( $root . '/vendor/bin/phpstan' ) . ' dump-parameters --json --configuration=' . escapeshellarg( $configuration ), $parameters, $parameter_status );
 	$parameters = json_decode( implode( "\n", $parameters ), true, 512, JSON_THROW_ON_ERROR );
-	if ( 0 !== $parameter_status || 5 > (int) $parameters['level'] ) {
-		throw new RuntimeException( 'The effective PHPStan level must remain at least five.' );
+	if ( 0 !== $parameter_status || 8 > (int) $parameters['level'] ) {
+		throw new RuntimeException( 'The effective PHPStan level must remain at least eight.' );
 	}
 	if ( 70400 !== $parameters['phpVersion'] ) {
 		throw new RuntimeException( 'Local PHPStan compatibility target must remain PHP 7.4.' );
+	}
+	if ( false !== $parameters['treatPhpDocTypesAsCertain'] ) {
+		throw new RuntimeException( 'Defensive PHPDoc checks must remain uncertain.' );
 	}
 	if ( array() !== $parameters['ignoreErrors'] ) {
 		throw new RuntimeException( 'PHPStan ignored errors need explicit review.' );
@@ -661,8 +664,40 @@ try {
 			throw new RuntimeException( 'Effective diagnostic suppression must fail independently of clean analysis.' );
 		}
 	}
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- An actual nullable-method diagnostic distinguishes the Level 8 gate from a clean Level 7 run.
+	file_put_contents( $probe_file, '<?php function ran_nullable_analysis_probe(?DateTimeImmutable $value): int { return $value->getTimestamp(); } echo ran_nullable_analysis_probe(null);' );
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Override only the private fixture level to prove its effective downgrade is independently rejected.
+	file_put_contents( $excluded_config, "includes:\n    - " . $probe_config . "\nparameters:\n    level: 7\n" );
+	list($analysis_status, $analysed_files, $analysis_report) = $run_analysis( $excluded_config );
+	if ( 0 !== $analysis_status || $maintained_files( $probe_root ) !== $analysed_files || 0 !== $analysis_report['totals']['file_errors'] ) {
+		throw new RuntimeException( 'The nullable probe must be clean at Level 7 with the same maintained population.' );
+	}
+	$downgrade_rejected = false;
+	try {
+		$assert_analysis_parameters( $excluded_config );
+	} catch ( RuntimeException $error ) {
+		$downgrade_rejected = 'The effective PHPStan level must remain at least eight.' === $error->getMessage();
+	}
+	if ( ! $downgrade_rejected ) {
+		throw new RuntimeException( 'An inherited Level 7 downgrade must fail the effective configuration guard.' );
+	}
+	list($analysis_status, $analysed_files, $analysis_report) = $run_analysis( $probe_config );
+	if ( 1 !== $analysis_status || $maintained_files( $probe_root ) !== $analysed_files || 1 !== $analysis_report['totals']['file_errors'] || array( 'method.nonObject' ) !== array_column( $analysis_report['files'][ $probe_file ]['messages'], 'identifier' ) ) {
+		throw new RuntimeException( 'The real Level 8 runner must report the nullable-method diagnostic.' );
+	}
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Protect defensive producer checks against an inherited PHPDoc-trust relaxation.
+	file_put_contents( $excluded_config, "includes:\n    - " . $probe_config . "\nparameters:\n    treatPhpDocTypesAsCertain: true\n" );
+	$trust_relaxation_rejected = false;
+	try {
+		$assert_analysis_parameters( $excluded_config );
+	} catch ( RuntimeException $error ) {
+		$trust_relaxation_rejected = 'Defensive PHPDoc checks must remain uncertain.' === $error->getMessage();
+	}
+	if ( ! $trust_relaxation_rejected ) {
+		throw new RuntimeException( 'An inherited PHPDoc-trust relaxation must fail the effective configuration guard.' );
+	}
 	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Write an inert newer native API whose compatibility diagnostic must survive the package's PHP 7.4 target.
-	file_put_contents( $probe_file, "<?php\nfunction ran_compatibility_probe( array \$values ): bool { return array_is_list( \$values ); }\n" );
+	file_put_contents( $probe_file, "<?php\n/** @param array<array-key,mixed> \$values */ function ran_compatibility_probe( array \$values ): bool { return array_is_list( \$values ); }\n" );
 	foreach ( array( 70400, 80100 ) as $version ) {
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Exercise effective compatibility settings inherited through a disposable configuration.
 		file_put_contents( $excluded_config, "includes:\n    - " . $probe_config . "\nparameters:\n    phpVersion: " . $version . "\n" );
@@ -747,22 +782,22 @@ try {
 	}
 }
 // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime.
-fwrite( STDOUT, "All maintained PHP is directly analysed at level five or stronger; future paths and exclusions are guarded.\n" );
+fwrite( STDOUT, "All maintained PHP is directly analysed at level eight or stronger; future paths and exclusions are guarded.\n" );
 
 // The local source profile is independent of exported consumer rules and their fixture payloads.
 $source_profile_is_scoped = static function ( SimpleXMLElement $document ): bool {
 	$configs = $document->xpath( '//config' );
-	if ( false === $configs || 1 !== count( $configs ) || 2 !== count( $configs[0]->attributes() )
+	if ( ! is_array( $configs ) || 1 !== count( $configs ) || ! isset( $configs[0] ) || 2 !== count( $configs[0]->attributes() )
 		|| 'testVersion' !== (string) $configs[0]['name'] || '7.4-' !== (string) $configs[0]['value']
 	) {
 		return true;
 	}
 	$exclusions = $document->xpath( '//exclude-pattern' );
-	if ( false === $exclusions || 1 !== count( $exclusions ) ) {
+	if ( ! is_array( $exclusions ) || 1 !== count( $exclusions ) ) {
 		return true;
 	}
 	$vendor = $document->xpath( '/ruleset/exclude-pattern' );
-	if ( false === $vendor || 1 !== count( $vendor ) || '^vendor/' !== (string) $vendor[0]
+	if ( ! is_array( $vendor ) || 1 !== count( $vendor ) || ! isset( $vendor[0] ) || '^vendor/' !== (string) $vendor[0]
 		|| 1 !== count( $vendor[0]->attributes() ) || 'relative' !== (string) $vendor[0]['type']
 	) {
 		return true;
@@ -773,14 +808,18 @@ $source_profile           = simplexml_load_file( $root . '/.phpcs.xml', 'SimpleX
 if ( false === $source_profile || $source_profile_is_scoped( $source_profile ) ) {
 	throw new RuntimeException( 'Local source rules must preserve PHP 7.4 and reject conditional or path-scoped exceptions.' );
 }
+$source_profile_xml = $source_profile->asXML();
+if ( ! is_string( $source_profile_xml ) ) {
+	throw new RuntimeException( 'Could not serialize the local source profile.' );
+}
 foreach ( array(
-	str_replace( 'value="7.4-"', 'value="8.3-"', $source_profile->asXML() ),
-	str_replace( '<config name="testVersion" value="7.4-"/>', '', $source_profile->asXML() ),
-	str_replace( '</ruleset>', '<config name="testVersion" value="7.4-"/></ruleset>', $source_profile->asXML() ),
-	str_replace( '</ruleset>', '<exclude-pattern>*/not-yet-created/*</exclude-pattern></ruleset>', $source_profile->asXML() ),
-	str_replace( '^vendor/', 'vendor/', $source_profile->asXML() ),
-	str_replace( 'type="relative"', 'type="absolute"', $source_profile->asXML() ),
-	str_replace( '<exclude-pattern type="relative">^vendor/</exclude-pattern>', '', $source_profile->asXML() ),
+	str_replace( 'value="7.4-"', 'value="8.3-"', $source_profile_xml ),
+	str_replace( '<config name="testVersion" value="7.4-"/>', '', $source_profile_xml ),
+	str_replace( '</ruleset>', '<config name="testVersion" value="7.4-"/></ruleset>', $source_profile_xml ),
+	str_replace( '</ruleset>', '<exclude-pattern>*/not-yet-created/*</exclude-pattern></ruleset>', $source_profile_xml ),
+	str_replace( '^vendor/', 'vendor/', $source_profile_xml ),
+	str_replace( 'type="relative"', 'type="absolute"', $source_profile_xml ),
+	str_replace( '<exclude-pattern type="relative">^vendor/</exclude-pattern>', '', $source_profile_xml ),
 ) as $mutant_xml ) {
 	$document = simplexml_load_string( $mutant_xml, 'SimpleXMLElement', LIBXML_NONET );
 	if ( false === $document || ! $source_profile_is_scoped( $document ) ) {
@@ -789,7 +828,11 @@ foreach ( array(
 }
 require_once $root . '/vendor/squizlabs/php_codesniffer/autoload.php';
 // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Read the canonical checker/fixer contract as local JSON data.
-$source_manifest = json_decode( file_get_contents( $root . '/composer.json' ), true, 512, JSON_THROW_ON_ERROR );
+$source_manifest_bytes = file_get_contents( $root . '/composer.json' );
+if ( ! is_string( $source_manifest_bytes ) ) {
+	throw new RuntimeException( 'Could not read the canonical source manifest.' );
+}
+$source_manifest = json_decode( $source_manifest_bytes, true, 512, JSON_THROW_ON_ERROR );
 if ( 'phpcs --standard=.phpcs.xml --report=summary' !== $source_manifest['scripts']['standards'] || 'phpcbf --standard=.phpcs.xml --report=summary' !== $source_manifest['scripts']['standards:fix'] ) {
 	throw new RuntimeException( 'Source check and fix must retain the same reviewed ruleset and default scope.' );
 }
@@ -799,6 +842,9 @@ $runner->config = new PHP_CodeSniffer\Config( array( '--standard=' . $root . '/.
 $runner->init();
 $selected_files = array();
 foreach ( new PHP_CodeSniffer\Files\FileList( $runner->config, $runner->ruleset ) as $source_path => $file ) {
+	if ( ! is_string( $source_path ) ) {
+		throw new RuntimeException( 'The source checker did not select a file path.' );
+	}
 	$selected_files[] = $source_path;
 }
 sort( $selected_files );
@@ -846,11 +892,12 @@ try {
 	if ( ! in_array( $compatibility_code, $inspect_source( $compatibility_probe, $root . '/tests/compatibility.php' ), true ) ) {
 		throw new RuntimeException( 'The local PHP 7.4 profile must diagnose the newer native API.' );
 	}
-	$mutant_xml = str_replace( 'value="7.4-"', 'value="8.3-"', $source_profile->asXML() );
+	$mutant_xml = str_replace( 'value="7.4-"', 'value="8.3-"', $source_profile_xml );
 	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Reproduce lost compatibility diagnostics only in the disposable local ruleset.
 	file_put_contents( $root . '/' . $selector_probe, $mutant_xml );
-	if ( in_array( $compatibility_code, $inspect_source( $compatibility_probe, $root . '/tests/compatibility.php', $selector_probe ), true )
-		|| ! $source_profile_is_scoped( simplexml_load_string( $mutant_xml, 'SimpleXMLElement', LIBXML_NONET ) )
+	$document = simplexml_load_string( $mutant_xml, 'SimpleXMLElement', LIBXML_NONET );
+	if ( false === $document || in_array( $compatibility_code, $inspect_source( $compatibility_probe, $root . '/tests/compatibility.php', $selector_probe ), true )
+		|| ! $source_profile_is_scoped( $document )
 	) {
 		throw new RuntimeException( 'A raised local compatibility target must hide the diagnostic but fail the guard.' );
 	}
@@ -860,8 +907,8 @@ try {
 		'<rule ref="RANWordPressLibrary" phpcbf-only="true"/>',
 	) as $selector ) {
 		$mutant_xml = false !== strpos( $selector, 'phpcbf-only' )
-			? str_replace( '<rule ref="RANWordPressLibrary"/>', $selector, $source_profile->asXML() )
-			: str_replace( '</ruleset>', $selector . '</ruleset>', $source_profile->asXML() );
+			? str_replace( '<rule ref="RANWordPressLibrary"/>', $selector, $source_profile_xml )
+			: str_replace( '</ruleset>', $selector . '</ruleset>', $source_profile_xml );
 		$document   = simplexml_load_string( $mutant_xml, 'SimpleXMLElement', LIBXML_NONET );
 		if ( false === $document || ! $source_profile_is_scoped( $document ) ) {
 			throw new RuntimeException( 'A conditional or path selector escaped the local source guard.' );
@@ -877,8 +924,8 @@ try {
 	}
 	foreach ( array( false, true ) as $exclude_fixture ) {
 		$mutant_xml = $exclude_fixture
-			? str_replace( '</ruleset>', '<exclude-pattern>*/native.php</exclude-pattern></ruleset>', $source_profile->asXML() )
-			: $source_profile->asXML();
+			? str_replace( '</ruleset>', '<exclude-pattern>*/native.php</exclude-pattern></ruleset>', $source_profile_xml )
+			: $source_profile_xml;
 		$document   = simplexml_load_string( $mutant_xml, 'SimpleXMLElement', LIBXML_NONET );
 		if ( false === $document || $exclude_fixture !== $source_profile_is_scoped( $document ) ) {
 			throw new RuntimeException( 'The root exclusion mutation must be rejected independently of current selection.' );
@@ -898,8 +945,12 @@ try {
 	if ( false === $exported_profile ) {
 		throw new RuntimeException( 'Could not load the exported ancestor for conditional controls.' );
 	}
+	$exported_profile_xml = $exported_profile->asXML();
+	if ( ! is_string( $exported_profile_xml ) ) {
+		throw new RuntimeException( 'Could not serialize the exported ancestor control.' );
+	}
 	foreach ( array( '', ' phpcbf-only="true"', ' phpcs-only="false"', ' phpcs-only="true"', ' phpcbf-only="false"' ) as $condition ) {
-		$mutant_xml = str_replace( '<rule ref="WordPress-Extra">', '<rule ref="WordPress-Extra"' . $condition . '>', $exported_profile->asXML() );
+		$mutant_xml = str_replace( '<rule ref="WordPress-Extra">', '<rule ref="WordPress-Extra"' . $condition . '>', $exported_profile_xml );
 		$document   = simplexml_load_string( $mutant_xml, 'SimpleXMLElement', LIBXML_NONET );
 		if ( false === $document || ( '' === $condition ) !== ( null === $find_selector_violation( $document, 'exported ancestor control' ) ) ) {
 			throw new RuntimeException( 'Recursive exported inspection must reject checker/fixer conditional attributes.' );
@@ -999,6 +1050,9 @@ if ( in_array( 'WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunction
 foreach ( $source_files as $source_path ) {
 	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Read owned source as inert checker input without executing its fixture operations.
 	$source = file_get_contents( $source_path );
+	if ( ! is_string( $source ) ) {
+		throw new RuntimeException( 'Could not read owned source: ' . $source_path );
+	}
 	if ( array() !== $inspect_source( $source, $source_path ) ) {
 		throw new RuntimeException( 'Existing source exceptions must pass the complete local profile: ' . $source_path );
 	}
