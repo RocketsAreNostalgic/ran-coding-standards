@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3](https://github.com/RocketsAreNostalgic/ran-coding-standards/compare/v1.0.2...v1.0.3) (2026-10-09)
+
+
+### Miscellaneous Chores
+
+* **quality:** enforce PHPStan Level 8 across maintained PHP ([#20](https://github.com/RocketsAreNostalgic/ran-coding-standards/issues/20)) ([f531a30](https://github.com/RocketsAreNostalgic/ran-coding-standards/commit/f531a30316b3757bf531bdaf5c8634bbf1c3f42b))
+
 ## [1.0.2](https://github.com/RocketsAreNostalgic/ran-coding-standards/compare/v1.0.1...v1.0.2) (2026-10-07)
 
 
