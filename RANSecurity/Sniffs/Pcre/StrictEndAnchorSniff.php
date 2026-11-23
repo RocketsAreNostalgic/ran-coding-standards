@@ -960,6 +960,16 @@ final class StrictEndAnchorSniff implements Sniff {
 		$state  = $current;
 		$enable = true;
 		$seen   = false;
+		$set    = array(
+			'm'  => false,
+			'x'  => false,
+			'xx' => false,
+		);
+		$unset  = array(
+			'm'  => false,
+			'x'  => false,
+			'xx' => false,
+		);
 
 		if ( '^' === $body[ $cursor ] ) {
 			$state['m']  = false;
@@ -990,15 +1000,21 @@ final class StrictEndAnchorSniff implements Sniff {
 			if ( false !== strpos( 'imsxUJnr', $ch ) ) {
 				$seen = true;
 				if ( 'm' === $ch ) {
-					$state['m'] = $enable;
+					if ( $enable ) {
+						$set['m'] = true;
+					} else {
+						$unset['m'] = true;
+					}
 				} elseif ( 'x' === $ch ) {
 					$adjacent_x = $cursor + 1 < $length && 'x' === $body[ $cursor + 1 ];
 					if ( $enable ) {
-						$state['x']  = true;
-						$state['xx'] = $adjacent_x;
+						$set['x'] = true;
+						if ( $adjacent_x ) {
+							$set['xx'] = true;
+						}
 					} else {
-						$state['x']  = false;
-						$state['xx'] = false;
+						$unset['x']  = true;
+						$unset['xx'] = true;
 					}
 					if ( $adjacent_x ) {
 						++$cursor;
@@ -1007,16 +1023,21 @@ final class StrictEndAnchorSniff implements Sniff {
 				++$cursor;
 				continue;
 			}
-			if ( ')' === $ch && $seen ) {
+			if ( ( ')' === $ch || ':' === $ch ) && $seen ) {
+				if ( $set['x'] && ! $set['xx'] ) {
+					$unset['xx'] = true;
+				}
+				foreach ( array( 'm', 'x', 'xx' ) as $flag ) {
+					if ( $set[ $flag ] ) {
+						$state[ $flag ] = true;
+					}
+					if ( $unset[ $flag ] ) {
+						$state[ $flag ] = false;
+					}
+				}
+
 				return array(
-					'scoped' => false,
-					'state'  => $state,
-					'end'    => $cursor,
-				);
-			}
-			if ( ':' === $ch && $seen ) {
-				return array(
-					'scoped' => true,
+					'scoped' => ':' === $ch,
 					'state'  => $state,
 					'end'    => $cursor,
 				);

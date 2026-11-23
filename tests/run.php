@@ -584,6 +584,7 @@ preg_match( "/\\$/", $price );
 preg_match( '/[a-z$]/', $char );
 preg_match( '/[]$]/', $char );
 preg_match( '/(?xx)[ ]$]/', $char );
+preg_match( '/(?xxix)[ ]$]/', $char );
 preg_match( '/[\Q\E]$]/', $char );
 preg_match( '/[\E]$]/', $char );
 preg_match( '/[^]$]/', $char );
@@ -692,6 +693,7 @@ namespace GlobalCases {
 	preg_match( '/[\Qa\E]value$/', $value );
 	preg_match( '/[ ]value$/xx', $value );
 	preg_match( '/(?xix)[ ]value$/', $value );
+	preg_match( '/(?xx)(?x)[ ]value$/', $value );
 	preg_match( '/(?aD)^value$/', $value );
 	preg_match( '/\c$value$/', $value );
 	preg_match( '/(*MARK:price$)value$/', $value );
@@ -716,7 +718,7 @@ $/x',
 }
 PHP;
 list($security_status, $security_messages) = $security_pcre_run( $security_pcre_invalid );
-if ( 1 !== $security_status || 36 !== count( $security_messages ) ) {
+if ( 1 !== $security_status || 37 !== count( $security_messages ) ) {
 	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime. Encode machine-readable fixture data or CLI diagnostics without WordPress helpers.
 	fwrite( STDERR, 'Unanchored PCRE end-dollar patterns were missed by RANSecurity: ' . json_encode( $security_messages ) . "\n" );
 	exit( 1 );
