@@ -19,6 +19,7 @@ $rulesets = array(
 	'RANWordPressPlugin'  => $root . '/RANWordPressPlugin/ruleset.xml',
 	'RANWordPressLibrary' => $root . '/RANWordPressLibrary/ruleset.xml',
 	'RANOwnedMethods'     => $root . '/RANOwnedMethods/ruleset.xml',
+	'RANSecurity'         => $root . '/RANSecurity/ruleset.xml',
 );
 
 $required_rules = array(
@@ -27,6 +28,7 @@ $required_rules = array(
 	'RANWordPressPlugin'  => array( 'RANWordPress' ),
 	'RANWordPressLibrary' => array( 'RANWordPress' ),
 	'RANOwnedMethods'     => array( 'RANOwnedMethods.NamingConventions.ValidMethodName' ),
+	'RANSecurity'         => array( 'RANSecurity.Pcre.StrictEndAnchor' ),
 );
 
 $forbidden_setting_patterns = array(
@@ -252,6 +254,7 @@ $fixtures = array(
 	'pluginRuleset'  => $tmp . '/plugin-ruleset.xml',
 	'libraryRuleset' => $tmp . '/library-ruleset.xml',
 	'ownedMethods'   => $tmp . '/owned-methods.php',
+	'securityPcre'   => $tmp . '/security-pcre.php',
 	'exception'      => $tmp . '/exception.php',
 	'output'         => $tmp . '/output.php',
 	'native'         => $tmp . '/native.php',
@@ -542,6 +545,227 @@ foreach ( array( 'pluginRuleset', 'libraryRuleset' ) as $profile_ruleset ) {
 }
 
 require __DIR__ . '/owned-methods.php';
+
+// Exercise opt-in RANSecurity.Pcre.StrictEndAnchor positive and negative boundaries.
+$security_pcre_file                        = $fixtures['securityPcre'];
+$security_pcre_run                         = static function ( string $contents ) use ( $phpcs, $security_pcre_file ): array {
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Write exact disposable fixture or configuration bytes in this CLI-only test.
+	if ( false === file_put_contents( $security_pcre_file, $contents . "\n" ) ) {
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime.
+		fwrite( STDERR, "Could not write PCRE security fixture.\n" );
+		exit( 1 );
+	}
+	$output = array();
+	// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- Run the selected local checker or isolated Composer consumer proof as a CLI subprocess.
+	exec( escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( $phpcs ) . ' -n --report=json --standard=RANSecurity ' . escapeshellarg( $security_pcre_file ) . ' 2>&1', $output, $status );
+	$report = json_decode( implode( "\n", $output ), true );
+	if ( ! is_array( $report ) || ! isset( $report['files'] ) ) {
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime.
+		fwrite( STDERR, 'RANSecurity check did not return JSON: ' . implode( "\n", $output ) . "\n" );
+		exit( 1 );
+	}
+	$messages = array();
+	foreach ( $report['files'] as $file ) {
+		$messages = array_merge( $messages, $file['messages'] );
+	}
+	return array( $status, $messages );
+};
+$security_pcre_valid_global                = <<<'PHP'
+<?php
+preg_match( '/\A[0-9a-f]{40}\z/iD', $sha );
+preg_match( '/^[0-9a-f]{40}$/iD', $sha );
+preg_match( ( '/^parenthesized$/D' ), $sha );
+preg_match(
+	<<<'PAT'
+	/^nowdoc$/D
+	PAT,
+	$sha
+);
+preg_match(
+	<<<PAT
+	/^heredoc$/D
+	PAT,
+	$sha
+);
+preg_match(
+	<<<PAT
+	/^{$a['{']}$/
+	PAT,
+	$sha
+);
+preg_match( '/^[ \t]*Plugin Name:.*$/m', $doc );
+preg_match( '/(?m)^value$/', $doc );
+preg_match( '/(?am)^value$/', $doc );
+preg_match( '/(?aPm)^value$/', $doc );
+preg_match( '/(?m:^value$)/', $doc );
+preg_match( '/\$100/', $price );
+preg_match( "/\\$/", $price );
+preg_match( '/[a-z$]/', $char );
+preg_match( '/[]$]/', $char );
+preg_match( '/(?xx)[ ]$]/', $char );
+preg_match( '/(?xxix)[ ]$]/', $char );
+preg_match( '/[\Q\E]$]/', $char );
+preg_match( '/[\E]$]/', $char );
+preg_match( '/(?[[]$]])/', $char );
+preg_match( '/(?[[ ]#]])value$/D', $char );
+preg_match( '/[^]$]/', $char );
+preg_match( '/[[:digit:]$]/', $char );
+preg_match( '/\Q$\E/', $price );
+preg_match( '/\c$/', $price );
+preg_match( '/(*MARK:price$)value/', $price );
+preg_match( "/(?C'price$')value/", $price );
+preg_match( '/(?#$)/', $price );
+preg_match( "/^prefix # comment $\n/x", $value );
+preg_match( "/(*CR)^prefix # comment\n$/x", $value );
+preg_match( "/(*CRLF)^prefix # comment\n$/x", $value );
+preg_match( "/(*NUL)^prefix # comment\n$/x", $value );
+preg_match( '/^prefix/', $value );
+preg_match( $dynamic_pattern, $value );
+$matcher->preg_match( '/^foo$/', $value );
+new preg_match( '/^foo$/', $value );
+new \preg_match( '/^foo$/', $value );
+new namespace\preg_match( '/^foo$/', $value );
+Tools\preg_match( '/^foo$/', $value );
+\Tools\preg_match( '/^foo$/', $value );
+#[\preg_match( '/^foo$/' )]
+#[preg_match( '/^foo$/' )]
+class Wrapper { public function preg_match( $p, $s ) {} }
+PHP;
+list($security_status, $security_messages) = $security_pcre_run( $security_pcre_valid_global );
+if ( 0 !== $security_status || array() !== $security_messages ) {
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime. Encode machine-readable fixture data or CLI diagnostics without WordPress helpers.
+	fwrite( STDERR, 'Compliant global PCRE patterns were rejected by RANSecurity: ' . json_encode( $security_messages ) . "\n" );
+	exit( 1 );
+}
+$security_pcre_valid_namespaced            = <<<'PHP'
+<?php
+namespace NamedRelative {
+	namespace\preg_match( '/^foo$/', $value );
+	namespace\preg_match_all( '/^foo$/', $value );
+}
+namespace AliasedScope {
+	use function Demo\other as preg_match;
+	preg_match( '/^aliased$/', $value );
+}
+namespace LocalShadowScope {
+	function preg_match( $p, $s ) {
+		return 0;
+	}
+	preg_match( '/^shadowed$/', $value );
+}
+namespace ReopenedScope {
+	function preg_match( $p, $s ) {
+		return 0;
+	}
+}
+namespace ReopenedScope {
+	preg_match( '/^reopened-shadowed$/', $value );
+}
+PHP;
+list($security_status, $security_messages) = $security_pcre_run( $security_pcre_valid_namespaced );
+if ( 0 !== $security_status || array() !== $security_messages ) {
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime. Encode machine-readable fixture data or CLI diagnostics without WordPress helpers.
+	fwrite( STDERR, 'Compliant namespaced PCRE patterns were rejected by RANSecurity: ' . json_encode( $security_messages ) . "\n" );
+	exit( 1 );
+}
+$security_pcre_reopened_semicolon          = <<<'PHP'
+<?php
+namespace SemiReopened;
+function preg_match( $p, $s ) {
+	return 0;
+}
+namespace SemiReopened;
+preg_match( '/^semi-reopened-shadowed$/', $value );
+PHP;
+list($security_status, $security_messages) = $security_pcre_run( $security_pcre_reopened_semicolon );
+if ( 0 !== $security_status || array() !== $security_messages ) {
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime. Encode machine-readable fixture data or CLI diagnostics without WordPress helpers.
+	fwrite( STDERR, 'Reopened semicolon namespace shadow was rejected by RANSecurity: ' . json_encode( $security_messages ) . "\n" );
+	exit( 1 );
+}
+$security_pcre_invalid                     = <<<'PHP'
+<?php
+namespace {
+	namespace\preg_match( '/^global-ns-rel$/', $value );
+	namespace\preg_match_all( '/^global-ns-rel-all$/', $value );
+}
+namespace InvalidScope {
+	use function Demo\other as preg_match;
+	\preg_match( '/^global-despite-alias$/', $value );
+}
+namespace GlobalAliasScope {
+	use function preg_match_all as preg_match;
+	use function preg_match_all as matches;
+	preg_match( '/^global-matcher-alias$/', $value );
+	matches( '/^ordinary-matcher-alias$/', $value );
+}
+namespace GlobalCases {
+	preg_match( '/^[0-9a-f]{40}$/i', $sha );
+	\preg_match( '#^[A-Za-z0-9_.-]{1,100}$#', $repo );
+	preg_match_all( '~^item$~', $list );
+	preg_match( "/^foo\$/", $value );
+	preg_match( "/^foo\\\\$/", $value );
+	preg_match( "/^foo\x24/", $value );
+	preg_match( "/^foo\X24/", $value );
+	preg_match( b'/^binary$/', $value );
+	preg_match( ( '/^parenthesized$/' ), $value );
+	preg_match(
+		<<<'PAT'
+		/^nowdoc$/
+		PAT,
+		$value
+	);
+	preg_match(
+		<<<PAT
+		/^heredoc$/
+		PAT,
+		$value
+	);
+	preg_match( '/\A(?:a|b$)/', $value );
+	preg_match( '/(*atomic:value$)/', $value );
+	preg_match( '/\Q[\Evalue$/', $value );
+	preg_match( '/[\Qa\E]value$/', $value );
+	preg_match( '/[ ]value$/xx', $value );
+	preg_match( '/(?xix)[ ]value$/', $value );
+	preg_match( '/(?xx)(?x)[ ]value$/', $value );
+	preg_match( '/(?aD)^value$/', $value );
+	preg_match( '/\c$value$/', $value );
+	preg_match( '/(*MARK:price$)value$/', $value );
+	preg_match( "/(?C'price$')value$/", $value );
+	preg_match( '/[]$]+value$/', $value );
+	preg_match( '/(?[[]$]])value$/', $value );
+	preg_match( '/(?[[ ]#]])value$/', $value );
+	preg_match( '/[^]$]+value$/', $value );
+	preg_match( '/[[:digit:]$]+value$/', $value );
+	preg_match( '/(?#$)value$/', $value );
+	preg_match( "/^value # comment\n$/x", $value );
+	preg_match( "/(*CR)^value # comment\r$/x", $value );
+	preg_match( "/(*NUL)^value # comment\0$/x", $value );
+	preg_match( "/(*ANY)^value # comment\x0B$/x", $value );
+	preg_match(
+		'/^value # multiline comment
+$/x',
+		$value
+	);
+	preg_match( '/(?-m:^value$)/m', $value );
+	preg_match( '/(?-m)^value$/m', $value );
+	preg_match( '/(?m:^a$)|b$/', $value );
+	preg_match( subject: $value, pattern: '/^named$/' );
+}
+PHP;
+list($security_status, $security_messages) = $security_pcre_run( $security_pcre_invalid );
+if ( 1 !== $security_status || 42 !== count( $security_messages ) ) {
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime. Encode machine-readable fixture data or CLI diagnostics without WordPress helpers.
+	fwrite( STDERR, 'Unanchored PCRE end-dollar patterns were missed by RANSecurity: ' . json_encode( $security_messages ) . "\n" );
+	exit( 1 );
+}
+foreach ( $security_messages as $security_message ) {
+	if ( 'RANSecurity.Pcre.StrictEndAnchor.UnanchoredEndDollar' !== $security_message['source'] || 'ERROR' !== $security_message['type'] ) {
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime. Encode machine-readable fixture data or CLI diagnostics without WordPress helpers.
+		fwrite( STDERR, 'Unexpected RANSecurity diagnostic: ' . json_encode( $security_message ) . "\n" );
+		exit( 1 );
+	}
+}
 
 // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime.
 fwrite( STDOUT, "All RAN standards preserve active inheritance and consumer boundaries, and their behavioral fixtures pass.\n" );

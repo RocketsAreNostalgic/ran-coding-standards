@@ -1,0 +1,1246 @@
+<?php
+/**
+ * PCRE end-of-subject anchor checks for validation patterns.
+ *
+ * @package RANSecurity
+ */
+
+namespace RANSecurity\Sniffs\Pcre;
+
+use PHP_CodeSniffer\Files\File;
+use PHP_CodeSniffer\Sniffs\Sniff;
+use PHPCSUtils\Tokens\Collections;
+use PHPCSUtils\Utils\Context;
+use PHPCSUtils\Utils\Namespaces;
+use PHPCSUtils\Utils\PassedParameters;
+use PHPCSUtils\Utils\TextStrings;
+use PHPCSUtils\Utils\UseStatements;
+
+/**
+ * Reject unescaped "$" anchors in single-line PCRE validation patterns lacking the "D" modifier.
+ */
+final class StrictEndAnchorSniff implements Sniff {
+
+	/**
+	 * PCRE matching functions typically used for input validation.
+	 *
+	 * @var array<string, bool>
+	 */
+	private const TARGET_FUNCTIONS = array(
+		'preg_match'     => true,
+		'preg_match_all' => true,
+	);
+
+	/**
+	 * Paired PCRE bracket delimiters.
+	 *
+	 * @var array<string, string>
+	 */
+	private const PAIRED_DELIMITERS = array(
+		'(' => ')',
+		'[' => ']',
+		'{' => '}',
+		'<' => '>',
+	);
+
+	/**
+	 * PCRE2 pattern-bearing (*keyword:...) group names whose bodies must be scanned.
+	 *
+	 * @var array<string, bool>
+	 */
+	private const PATTERN_STAR_GROUPS = array(
+		'atomic'                         => true,
+		'positive_lookahead'             => true,
+		'pla'                            => true,
+		'negative_lookahead'             => true,
+		'nla'                            => true,
+		'positive_lookbehind'            => true,
+		'plb'                            => true,
+		'negative_lookbehind'            => true,
+		'nlb'                            => true,
+		'non_atomic_positive_lookahead'  => true,
+		'napla'                          => true,
+		'non_atomic_positive_lookbehind' => true,
+		'naplb'                          => true,
+		'script_run'                     => true,
+		'sr'                             => true,
+		'atomic_script_run'              => true,
+		'asr'                            => true,
+	);
+
+	/**
+	 * Cached per-file index of function imports and namespace-level shadowing declarations.
+	 *
+	 * @var array{
+	 *     file_key:string,
+	 *     has_target_alias:bool,
+	 *     namespaces:array<int, string>,
+	 *     imports:array<int, array<string, list<array{pos:int,target:string}>>>,
+	 *     shadowed:array<string, array<string, bool>>
+	 * }|null
+	 */
+	private $file_index = null;
+
+	/**
+	 * Register function-call identifier tokens.
+	 *
+	 * @return array<int>
+	 */
+	public function register() {
+		return array( T_STRING );
+	}
+
+	/**
+	 * Inspect literal pattern arguments passed to preg_match() / preg_match_all().
+	 *
+	 * @param File $phpcs_file The file being checked.
+	 * @param int  $stack_ptr  Identifier token position.
+	 * @return void
+	 */
+	public function process( File $phpcs_file, $stack_ptr ) {
+		$tokens = $phpcs_file->getTokens();
+		$next   = $this->find_non_empty( $tokens, $stack_ptr + 1, 1 );
+		if ( null === $next || 'T_OPEN_PARENTHESIS' !== $tokens[ $next ]['type'] ) {
+			return;
+		}
+
+		if ( Context::inAttribute( $phpcs_file, $stack_ptr ) ) {
+			return;
+		}
+
+		$index               = $this->get_file_index( $phpcs_file );
+		$scope               = $this->active_namespace_scope( $tokens, $stack_ptr, $index['namespaces'] );
+		$is_global_qualified = false;
+		$prev                = $this->find_non_empty( $tokens, $stack_ptr - 1, -1 );
+		if ( null !== $prev ) {
+			$prev_code = $tokens[ $prev ]['code'];
+			if (
+				T_FUNCTION === $prev_code
+				|| T_CONST === $prev_code
+				|| T_NEW === $prev_code
+				|| isset( Collections::objectOperators()[ $prev_code ] )
+			) {
+				return;
+			}
+			if ( T_NS_SEPARATOR === $prev_code ) {
+				$before_ns = $this->find_non_empty( $tokens, $prev - 1, -1 );
+				if ( null !== $before_ns ) {
+					$before_code = $tokens[ $before_ns ]['code'];
+					if ( T_STRING === $before_code || T_NEW === $before_code ) {
+						return;
+					}
+					if ( T_NAMESPACE === $before_code ) {
+						$before_keyword = $this->find_non_empty( $tokens, $before_ns - 1, -1 );
+						if ( null !== $before_keyword && T_NEW === $tokens[ $before_keyword ]['code'] ) {
+							return;
+						}
+						if ( '' !== $scope['name'] ) {
+							return;
+						}
+					}
+				}
+				$is_global_qualified = true;
+			}
+		}
+
+		$name = strtolower( $tokens[ $stack_ptr ]['content'] );
+		if ( $is_global_qualified ) {
+			if ( ! isset( self::TARGET_FUNCTIONS[ $name ] ) ) {
+				return;
+			}
+		} else {
+			if ( ! isset( self::TARGET_FUNCTIONS[ $name ] ) && ! $index['has_target_alias'] ) {
+				return;
+			}
+			$imported = $this->resolve_imported_function( $stack_ptr, $scope['key'], $name, $index['imports'] );
+			if ( null !== $imported ) {
+				if ( ! isset( self::TARGET_FUNCTIONS[ $imported ] ) ) {
+					return;
+				}
+			} elseif ( ! isset( self::TARGET_FUNCTIONS[ $name ] ) ) {
+				return;
+			} elseif ( '' !== $scope['name'] && isset( $index['shadowed'][ $scope['name'] ][ $name ] ) ) {
+				return;
+			}
+		}
+
+		$param = PassedParameters::getParameter( $phpcs_file, $stack_ptr, 1, 'pattern' );
+		if ( false === $param ) {
+			return;
+		}
+
+		$literal = $this->extract_single_literal( $phpcs_file, (int) $param['start'], (int) $param['end'] );
+		if ( null === $literal ) {
+			return;
+		}
+
+		$pattern_ptr = $literal['ptr'];
+		$pattern     = $literal['pattern'];
+		$parsed      = $this->split_pcre_pattern( $pattern );
+		if ( null === $parsed ) {
+			return;
+		}
+
+		$body      = $parsed['body'];
+		$modifiers = $parsed['modifiers'];
+		if ( false !== strpos( $modifiers, 'D' ) ) {
+			return;
+		}
+
+		$initial_multiline = false !== strpos( $modifiers, 'm' );
+		$initial_extended  = false !== strpos( $modifiers, 'x' );
+		$initial_utf       = false !== strpos( $modifiers, 'u' );
+		if ( ! $this->has_active_single_line_dollar( $body, $initial_multiline, $initial_extended, $initial_utf ) ) {
+			return;
+		}
+
+		$phpcs_file->addError(
+			'PCRE pattern uses "$" without the "D" modifier, which allows a trailing newline; use "\\z" or add the "D" modifier.',
+			$pattern_ptr,
+			'UnanchoredEndDollar'
+		);
+	}
+
+	/**
+	 * Build or return the single-pass per-file index of `use function` imports and
+	 * unconditional namespace-level function declarations shadowing target matchers.
+	 *
+	 * @param File $phpcs_file The file being checked.
+	 * @return array{
+	 *     file_key:string,
+	 *     has_target_alias:bool,
+	 *     namespaces:array<int, string>,
+	 *     imports:array<int, array<string, list<array{pos:int,target:string}>>>,
+	 *     shadowed:array<string, array<string, bool>>
+	 * }
+	 */
+	private function get_file_index( File $phpcs_file ): array {
+		$tokens   = $phpcs_file->getTokens();
+		$file_key = spl_object_id( $phpcs_file ) . ':' . $phpcs_file->getFilename() . ':' . count( $tokens );
+		if ( null !== $this->file_index && $this->file_index['file_key'] === $file_key ) {
+			return $this->file_index;
+		}
+
+		$has_target_alias = false;
+		/** @var array<int, string> $namespaces */
+		$namespaces = array( 0 => '' );
+		/** @var array<int, array<string, list<array{pos:int,target:string}>>> $imports */
+		$imports = array();
+		/** @var array<string, array<string, bool>> $shadowed */
+		$shadowed          = array();
+		$current_ns_key    = 0;
+		$current_ns_name   = '';
+		$current_ns_closer = null;
+		$total             = count( $tokens );
+
+		for ( $i = 0; $i < $total; ++$i ) {
+			if ( null !== $current_ns_closer && $i > $current_ns_closer ) {
+				$current_ns_key    = 0;
+				$current_ns_name   = '';
+				$current_ns_closer = null;
+			}
+
+			$code = $tokens[ $i ]['code'];
+			if ( T_NAMESPACE === $code ) {
+				$after_ns = $this->find_non_empty( $tokens, $i + 1, 1 );
+				if ( null !== $after_ns && T_NS_SEPARATOR === $tokens[ $after_ns ]['code'] ) {
+					continue;
+				}
+				$current_ns_key                = $i;
+				$declared_ns                   = Namespaces::getDeclaredName( $phpcs_file, $i );
+				$current_ns_name               = is_string( $declared_ns ) ? strtolower( $declared_ns ) : '';
+				$current_ns_closer             = isset( $tokens[ $i ]['scope_closer'] ) ? (int) $tokens[ $i ]['scope_closer'] : null;
+				$namespaces[ $current_ns_key ] = $current_ns_name;
+				if ( ! isset( $imports[ $current_ns_key ] ) ) {
+					$imports[ $current_ns_key ] = array();
+				}
+				continue;
+			}
+
+			if ( T_USE === $code ) {
+				if ( ! UseStatements::isImportUse( $phpcs_file, $i ) ) {
+					continue;
+				}
+				$use_conditions = isset( $tokens[ $i ]['conditions'] ) && is_array( $tokens[ $i ]['conditions'] )
+					? $tokens[ $i ]['conditions']
+					: array();
+				if ( null !== $current_ns_closer ) {
+					if ( ! isset( $use_conditions[ $current_ns_key ] ) || count( $use_conditions ) > 1 ) {
+						continue;
+					}
+				} elseif ( array() !== $use_conditions ) {
+					continue;
+				}
+
+				$split = UseStatements::splitImportUseStatement( $phpcs_file, $i );
+				foreach ( $split['function'] as $alias => $target ) {
+					$alias_key         = strtolower( $alias );
+					$normalized_target = strtolower( ltrim( $target, '\\' ) );
+					if ( isset( self::TARGET_FUNCTIONS[ $normalized_target ] ) ) {
+						$has_target_alias = true;
+					}
+					$imports[ $current_ns_key ][ $alias_key ][] = array(
+						'pos'    => $i,
+						'target' => $normalized_target,
+					);
+				}
+				continue;
+			}
+
+			if ( T_FUNCTION === $code && '' !== $current_ns_name ) {
+				$conditions = isset( $tokens[ $i ]['conditions'] ) && is_array( $tokens[ $i ]['conditions'] )
+					? $tokens[ $i ]['conditions']
+					: array();
+				if ( count( $conditions ) > 1 || ( 1 === count( $conditions ) && T_NAMESPACE !== reset( $conditions ) ) ) {
+					continue;
+				}
+				$fn_name_ptr = $this->find_non_empty( $tokens, $i + 1, 1 );
+				if ( null !== $fn_name_ptr && 'T_BITWISE_AND' === $tokens[ $fn_name_ptr ]['type'] ) {
+					$fn_name_ptr = $this->find_non_empty( $tokens, $fn_name_ptr + 1, 1 );
+				}
+				if ( null !== $fn_name_ptr && T_STRING === $tokens[ $fn_name_ptr ]['code'] ) {
+					$fn_name = strtolower( $tokens[ $fn_name_ptr ]['content'] );
+					if ( isset( self::TARGET_FUNCTIONS[ $fn_name ] ) ) {
+						$shadowed[ $current_ns_name ][ $fn_name ] = true;
+					}
+				}
+			}
+		}
+
+		$this->file_index = array(
+			'file_key'         => $file_key,
+			'has_target_alias' => $has_target_alias,
+			'namespaces'       => $namespaces,
+			'imports'          => $imports,
+			'shadowed'         => $shadowed,
+		);
+
+		return $this->file_index;
+	}
+
+	/**
+	 * Determine the active namespace block key and lowercased name for $stack_ptr using the
+	 * cached per-file namespace map without rescanning tokens.
+	 *
+	 * @param array<int, array<string, mixed>> $tokens     File token stack.
+	 * @param int                              $stack_ptr  Token pointer.
+	 * @param array<int, string>               $namespaces Indexed namespace keys to lowercased names.
+	 * @return array{key:int,name:string}
+	 */
+	private function active_namespace_scope( array $tokens, int $stack_ptr, array $namespaces ): array {
+		if ( isset( $tokens[ $stack_ptr ]['conditions'] ) && is_array( $tokens[ $stack_ptr ]['conditions'] ) ) {
+			foreach ( $tokens[ $stack_ptr ]['conditions'] as $cond_ptr => $cond_code ) {
+				if ( T_NAMESPACE === $cond_code ) {
+					$key = (int) $cond_ptr;
+					return array(
+						'key'  => $key,
+						'name' => $namespaces[ $key ] ?? '',
+					);
+				}
+			}
+		}
+
+		$scope_key = 0;
+		foreach ( $namespaces as $ns_key => $ns_name ) {
+			if ( $ns_key <= $stack_ptr && $ns_key > $scope_key ) {
+				if ( isset( $tokens[ $ns_key ]['scope_closer'] ) && $stack_ptr > (int) $tokens[ $ns_key ]['scope_closer'] ) {
+					continue;
+				}
+				$scope_key = $ns_key;
+			}
+		}
+
+		return array(
+			'key'  => $scope_key,
+			'name' => $namespaces[ $scope_key ] ?? '',
+		);
+	}
+
+	/**
+	 * Resolve an unqualified call identifier against indexed `use function` imports in the
+	 * active namespace block, returning the lowercased normalized target name or null.
+	 *
+	 * @param int                                                           $stack_ptr Call identifier token position.
+	 * @param int                                                           $scope_key Active namespace block key.
+	 * @param string                                                        $name      Lowercased function name.
+	 * @param array<int, array<string, list<array{pos:int,target:string}>>> $imports   Per-namespace-block import table.
+	 * @return string|null
+	 */
+	private function resolve_imported_function( int $stack_ptr, int $scope_key, string $name, array $imports ): ?string {
+		if ( ! isset( $imports[ $scope_key ][ $name ] ) ) {
+			return null;
+		}
+
+		$resolved = null;
+		foreach ( $imports[ $scope_key ][ $name ] as $entry ) {
+			if ( $entry['pos'] < $stack_ptr ) {
+				$resolved = $entry['target'];
+			}
+		}
+
+		return $resolved;
+	}
+
+	/**
+	 * Extract and decode one complete constant string literal (plain, multiline, binary-prefixed,
+	 * parenthesized, nowdoc, or variable-free heredoc) from a parameter range.
+	 *
+	 * @param File $phpcs_file The file being checked.
+	 * @param int  $start      First token in the parameter.
+	 * @param int  $end        Last token in the parameter.
+	 * @return array{ptr:int,pattern:string}|null
+	 */
+	private function extract_single_literal( File $phpcs_file, int $start, int $end ): ?array {
+		$tokens = $phpcs_file->getTokens();
+
+		// Unwrap matching outer grouping parentheses around the expression.
+		while ( $start <= $end ) {
+			$first_non_empty = $this->find_non_empty_in_range( $tokens, $start, $end, 1 );
+			$last_non_empty  = $this->find_non_empty_in_range( $tokens, $end, $start, -1 );
+			if ( null === $first_non_empty || null === $last_non_empty ) {
+				return null;
+			}
+			if (
+				'T_OPEN_PARENTHESIS' === $tokens[ $first_non_empty ]['type']
+				&& isset( $tokens[ $first_non_empty ]['parenthesis_closer'] )
+				&& (int) $tokens[ $first_non_empty ]['parenthesis_closer'] === $last_non_empty
+			) {
+				$start = $first_non_empty + 1;
+				$end   = $last_non_empty - 1;
+				continue;
+			}
+			$start = $first_non_empty;
+			$end   = $last_non_empty;
+			break;
+		}
+
+		if ( $start > $end ) {
+			return null;
+		}
+
+		$cursor = $start;
+		if ( 'T_BINARY_CAST' === $tokens[ $cursor ]['type'] ) {
+			$after_cast = $this->find_non_empty_in_range( $tokens, $cursor + 1, $end, 1 );
+			if ( null === $after_cast ) {
+				return null;
+			}
+			$cursor = $after_cast;
+		}
+
+		$token_type = is_string( $tokens[ $cursor ]['type'] ?? null ) ? $tokens[ $cursor ]['type'] : '';
+		if ( 'T_START_NOWDOC' === $token_type || 'T_START_HEREDOC' === $token_type ) {
+			if ( ! isset( $tokens[ $cursor ]['scope_closer'] ) ) {
+				return null;
+			}
+			$closer = (int) $tokens[ $cursor ]['scope_closer'];
+			if ( $closer > $end ) {
+				return null;
+			}
+			if ( null !== $this->find_non_empty_in_range( $tokens, $closer + 1, $end, 1 ) ) {
+				return null;
+			}
+			$body = $this->strip_flexible_doc_indent(
+				TextStrings::getCompleteTextString( $phpcs_file, $cursor, false ),
+				$tokens[ $closer ]['content']
+			);
+			if ( 'T_START_HEREDOC' === $token_type ) {
+				if ( $this->has_heredoc_interpolation( $body ) ) {
+					return null;
+				}
+				$body = $this->decode_double_quoted_body( $body, false );
+			}
+
+			return array(
+				'ptr'     => $cursor,
+				'pattern' => $body,
+			);
+		}
+
+		$first    = null;
+		$last_str = null;
+		$raw      = '';
+
+		for ( $i = $cursor; $i <= $end; ++$i ) {
+			if ( T_CONSTANT_ENCAPSED_STRING === $tokens[ $i ]['code'] ) {
+				if ( null === $first ) {
+					$first = $i;
+				} elseif ( $last_str + 1 !== $i ) {
+					return null;
+				}
+				$last_str = $i;
+				$raw     .= $tokens[ $i ]['content'];
+				continue;
+			}
+			if ( $this->is_empty_token( $tokens[ $i ] ) ) {
+				continue;
+			}
+			return null;
+		}
+
+		if ( null === $first ) {
+			return null;
+		}
+
+		return array(
+			'ptr'     => $first,
+			'pattern' => $this->decode_literal( $raw ),
+		);
+	}
+
+	/**
+	 * Find the nearest non-empty token within inclusive bounds [$from, $limit] (or [$limit, $from]).
+	 *
+	 * @param array<int, array<string, mixed>> $tokens File token stack.
+	 * @param int                              $from   Starting token index.
+	 * @param int                              $limit  Inclusive stopping index.
+	 * @param int                              $step   Search direction (+1 or -1).
+	 * @return int|null
+	 */
+	private function find_non_empty_in_range( array $tokens, int $from, int $limit, int $step ): ?int {
+		for ( $i = $from; $step > 0 ? $i <= $limit : $i >= $limit; $i += $step ) {
+			if ( isset( $tokens[ $i ] ) && ! $this->is_empty_token( $tokens[ $i ] ) ) {
+				return $i;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Strip PHP 7.3+ flexible nowdoc/heredoc indentation matching the closing marker.
+	 *
+	 * @param string $body         Raw nowdoc/heredoc body without the final trailing line break.
+	 * @param string $closing_line Raw T_END_NOWDOC / T_END_HEREDOC token content.
+	 * @return string
+	 */
+	private function strip_flexible_doc_indent( string $body, string $closing_line ): string {
+		$indent_len = strspn( $closing_line, " \t" );
+		if ( 0 === $indent_len || '' === $body ) {
+			return $body;
+		}
+		$indent = substr( $closing_line, 0, $indent_len );
+		$lines  = explode( "\n", $body );
+		foreach ( $lines as &$line ) {
+			if ( 0 === strpos( $line, $indent ) ) {
+				$line = substr( $line, $indent_len );
+			}
+		}
+		unset( $line );
+
+		return implode( "\n", $lines );
+	}
+
+	/**
+	 * Detect whether a heredoc body contains any PHP variable interpolation in a bounded single pass.
+	 *
+	 * @param string $body Raw heredoc body.
+	 * @return bool
+	 */
+	private function has_heredoc_interpolation( string $body ): bool {
+		$length = strlen( $body );
+		for ( $i = 0; $i < $length; ++$i ) {
+			if ( '\\' === $body[ $i ] ) {
+				++$i;
+				continue;
+			}
+			if ( '{' === $body[ $i ] && $i + 1 < $length && '$' === $body[ $i + 1 ] ) {
+				return true;
+			}
+			if ( '$' === $body[ $i ] && $i + 1 < $length ) {
+				$next = $body[ $i + 1 ];
+				if (
+					'{' === $next
+					|| '_' === $next
+					|| ( $next >= 'a' && $next <= 'z' )
+					|| ( $next >= 'A' && $next <= 'Z' )
+					|| ord( $next ) >= 0x80
+				) {
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Find the nearest non-empty token starting at $start in direction $step (+1 or -1).
+	 *
+	 * @param array<int, array<string, mixed>> $tokens File token stack.
+	 * @param int                              $start  Starting token index.
+	 * @param int                              $step   Search direction (+1 or -1).
+	 * @return int|null
+	 */
+	private function find_non_empty( array $tokens, int $start, int $step ): ?int {
+		for ( $i = $start; isset( $tokens[ $i ] ); $i += $step ) {
+			if ( ! $this->is_empty_token( $tokens[ $i ] ) ) {
+				return $i;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Determine whether a token is whitespace, a comment, or a PHPCS annotation.
+	 *
+	 * @param array<string, mixed> $token Token entry from File::getTokens().
+	 * @return bool
+	 */
+	private function is_empty_token( array $token ): bool {
+		$code = $token['code'];
+		if ( T_WHITESPACE === $code || T_COMMENT === $code || T_DOC_COMMENT === $code ) {
+			return true;
+		}
+
+		$type = is_string( $token['type'] ?? null ) ? $token['type'] : '';
+
+		return 0 === strpos( $type, 'T_DOC_COMMENT_' ) || 0 === strpos( $type, 'T_PHPCS_' );
+	}
+
+	/**
+	 * Decode a PHP single- or double-quoted constant string literal in one pass.
+	 *
+	 * @param string $raw Raw token content including surrounding quotes.
+	 * @return string
+	 */
+	private function decode_literal( string $raw ): string {
+		if ( strlen( $raw ) >= 2 && ( 'b' === $raw[0] || 'B' === $raw[0] ) && ( "'" === $raw[1] || '"' === $raw[1] ) ) {
+			$raw = substr( $raw, 1 );
+		}
+		$unquoted = TextStrings::stripQuotes( $raw );
+		$length   = strlen( $unquoted );
+		if ( '' === $raw || "'" === $raw[0] ) {
+			$result = '';
+			for ( $i = 0; $i < $length; ++$i ) {
+				if ( '\\' === $unquoted[ $i ] && $i + 1 < $length && ( '\\' === $unquoted[ $i + 1 ] || "'" === $unquoted[ $i + 1 ] ) ) {
+					$result .= $unquoted[ $i + 1 ];
+					++$i;
+					continue;
+				}
+				$result .= $unquoted[ $i ];
+			}
+			return $result;
+		}
+
+		return $this->decode_double_quoted_body( $unquoted, true );
+	}
+
+	/**
+	 * Decode PHP double-quoted or heredoc escape sequences in a single pass.
+	 *
+	 * @param string $unquoted       Body bytes without surrounding delimiters.
+	 * @param bool   $unescape_quote Whether \" unescapes to " (true for double-quoted strings, false for heredocs).
+	 * @return string
+	 */
+	private function decode_double_quoted_body( string $unquoted, bool $unescape_quote ): string {
+		$length         = strlen( $unquoted );
+		$simple_escapes = array(
+			'n'  => "\n",
+			'r'  => "\r",
+			't'  => "\t",
+			'v'  => "\v",
+			'e'  => "\e",
+			'f'  => "\f",
+			'\\' => '\\',
+			'$'  => '$',
+		);
+		if ( $unescape_quote ) {
+			$simple_escapes['"'] = '"';
+		}
+
+		$result = '';
+		for ( $i = 0; $i < $length; ++$i ) {
+			if ( '\\' !== $unquoted[ $i ] || $i + 1 >= $length ) {
+				$result .= $unquoted[ $i ];
+				continue;
+			}
+			$next = $unquoted[ $i + 1 ];
+			if ( isset( $simple_escapes[ $next ] ) ) {
+				$result .= $simple_escapes[ $next ];
+				++$i;
+				continue;
+			}
+			if ( ( 'x' === $next || 'X' === $next ) && $i + 2 < $length && ctype_xdigit( $unquoted[ $i + 2 ] ) ) {
+				$hex = $unquoted[ $i + 2 ];
+				++$i;
+				if ( $i + 2 < $length && ctype_xdigit( $unquoted[ $i + 2 ] ) ) {
+					$hex .= $unquoted[ $i + 2 ];
+					++$i;
+				}
+				++$i;
+				$result .= chr( (int) hexdec( $hex ) );
+				continue;
+			}
+			if ( $next >= '0' && $next <= '7' ) {
+				$oct = $next;
+				++$i;
+				for ( $k = 0; $k < 2 && $i + 1 < $length; ++$k ) {
+					$digit = $unquoted[ $i + 1 ];
+					if ( $digit < '0' || $digit > '7' ) {
+						break;
+					}
+					$oct .= $digit;
+					++$i;
+				}
+				$result .= chr( (int) octdec( $oct ) & 0xFF );
+				continue;
+			}
+			if ( 'u' === $next && $i + 2 < $length && '{' === $unquoted[ $i + 2 ] ) {
+				$close_brace = strpos( $unquoted, '}', $i + 3 );
+				if ( false !== $close_brace ) {
+					$hex = substr( $unquoted, $i + 3, $close_brace - ( $i + 3 ) );
+					if ( '' !== $hex && ctype_xdigit( $hex ) ) {
+						$codepoint = (int) hexdec( $hex );
+						$encoded   = $this->encode_utf8_codepoint( $codepoint );
+						if ( null !== $encoded ) {
+							$result .= $encoded;
+							$i       = $close_brace;
+							continue;
+						}
+					}
+				}
+			}
+			$result .= '\\' . $next;
+			++$i;
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Encode a Unicode scalar value to UTF-8 bytes without requiring ext-mbstring.
+	 *
+	 * @param int $codepoint Unicode code point.
+	 * @return string|null
+	 */
+	private function encode_utf8_codepoint( int $codepoint ): ?string {
+		if ( $codepoint < 0 || $codepoint > 0x10FFFF || ( $codepoint >= 0xD800 && $codepoint <= 0xDFFF ) ) {
+			return null;
+		}
+		if ( $codepoint <= 0x7F ) {
+			return chr( $codepoint );
+		}
+		if ( $codepoint <= 0x7FF ) {
+			return chr( 0xC0 | ( $codepoint >> 6 ) ) . chr( 0x80 | ( $codepoint & 0x3F ) );
+		}
+		if ( $codepoint <= 0xFFFF ) {
+			return chr( 0xE0 | ( $codepoint >> 12 ) )
+				. chr( 0x80 | ( ( $codepoint >> 6 ) & 0x3F ) )
+				. chr( 0x80 | ( $codepoint & 0x3F ) );
+		}
+
+		return chr( 0xF0 | ( $codepoint >> 18 ) )
+			. chr( 0x80 | ( ( $codepoint >> 12 ) & 0x3F ) )
+			. chr( 0x80 | ( ( $codepoint >> 6 ) & 0x3F ) )
+			. chr( 0x80 | ( $codepoint & 0x3F ) );
+	}
+
+	/**
+	 * Split a delimited PCRE string into body and modifier flags.
+	 *
+	 * @param string $pattern Full PCRE pattern string.
+	 * @return array{body:string,modifiers:string}|null
+	 */
+	private function split_pcre_pattern( string $pattern ): ?array {
+		$trimmed = ltrim( $pattern );
+		$length  = strlen( $trimmed );
+		if ( $length < 2 ) {
+			return null;
+		}
+
+		$open  = $trimmed[0];
+		$close = self::PAIRED_DELIMITERS[ $open ] ?? $open;
+		if ( ctype_alnum( $open ) || '\\' === $open ) {
+			return null;
+		}
+
+		$close_pos = null;
+		$escaped   = false;
+		$depth     = 1;
+		for ( $i = 1; $i < $length; ++$i ) {
+			$char = $trimmed[ $i ];
+			if ( $escaped ) {
+				$escaped = false;
+				continue;
+			}
+			if ( '\\' === $char ) {
+				$escaped = true;
+				continue;
+			}
+			if ( $open !== $close && $open === $char ) {
+				++$depth;
+				continue;
+			}
+			if ( $close === $char ) {
+				--$depth;
+				if ( 0 === $depth ) {
+					$close_pos = $i;
+					break;
+				}
+			}
+		}
+
+		if ( null === $close_pos ) {
+			return null;
+		}
+
+		return array(
+			'body'      => substr( $trimmed, 1, $close_pos - 1 ),
+			'modifiers' => substr( $trimmed, $close_pos + 1 ),
+		);
+	}
+
+	/**
+	 * Detect an active non-multiline "$" anchor while respecting escapes, \Q...\E,
+	 * character classes (including leading "]" and POSIX classes), comments, newline verbs,
+	 * pattern-bearing (*keyword:...) groups, and inline modifiers.
+	 *
+	 * @param string $body              PCRE pattern body without delimiters.
+	 * @param bool   $initial_multiline Whether trailing /m is active initially.
+	 * @param bool   $initial_extended  Whether trailing /x is active initially.
+	 * @param bool   $initial_utf       Whether trailing /u is active initially.
+	 * @return bool
+	 */
+	private function has_active_single_line_dollar( string $body, bool $initial_multiline, bool $initial_extended, bool $initial_utf ): bool {
+		$length          = strlen( $body );
+		$in_quote        = false;
+		$in_class        = false;
+		$class_first     = false;
+		$class_negation  = false;
+		$ext_class_depth = 0;
+		$newline_mode    = 'LF';
+		$utf             = $initial_utf;
+		/** @var array<int, array{m:bool,x:bool,xx:bool}> $stack */
+		$stack = array(
+			array(
+				'm'  => $initial_multiline,
+				'x'  => $initial_extended,
+				'xx' => false,
+			),
+		);
+
+		for ( $i = 0; $i < $length; ++$i ) {
+			$char      = $body[ $i ];
+			$top_index = count( $stack ) - 1;
+			$current   = $stack[ $top_index ];
+
+			if ( $in_quote ) {
+				if ( '\\' === $char && $i + 1 < $length && 'E' === $body[ $i + 1 ] ) {
+					$in_quote = false;
+					++$i;
+					continue;
+				}
+				if ( $in_class ) {
+					$class_first    = false;
+					$class_negation = false;
+				}
+				continue;
+			}
+
+			if ( $in_class ) {
+				if ( '\\' === $char ) {
+					if ( $i + 1 < $length && 'Q' === $body[ $i + 1 ] ) {
+						$in_quote = true;
+						++$i;
+						continue;
+					}
+					if ( $i + 1 < $length && 'E' === $body[ $i + 1 ] ) {
+						++$i;
+						continue;
+					}
+					if ( $i + 2 < $length && 'c' === $body[ $i + 1 ] ) {
+						$class_first    = false;
+						$class_negation = false;
+						$i             += 2;
+						continue;
+					}
+					$class_first    = false;
+					$class_negation = false;
+					++$i;
+					continue;
+				}
+				if ( ( $current['xx'] || $ext_class_depth > 0 ) && ( ' ' === $char || "\t" === $char ) ) {
+					continue;
+				}
+				if ( $class_negation && '^' === $char ) {
+					$class_negation = false;
+					continue;
+				}
+				$was_first      = $class_first;
+				$class_first    = false;
+				$class_negation = false;
+				if ( '[' === $char && $i + 1 < $length && ( ':' === $body[ $i + 1 ] || '.' === $body[ $i + 1 ] || '=' === $body[ $i + 1 ] ) ) {
+					$marker = $body[ $i + 1 ];
+					$end    = strpos( $body, $marker . ']', $i + 2 );
+					if ( false !== $end ) {
+						$i = $end + 1;
+						continue;
+					}
+				}
+				if ( ']' === $char && ! $was_first ) {
+					$in_class = false;
+				}
+				continue;
+			}
+
+			if ( $ext_class_depth > 0 ) {
+				if ( '\\' === $char ) {
+					if ( $i + 1 < $length && 'Q' === $body[ $i + 1 ] ) {
+						$in_quote = true;
+						++$i;
+						continue;
+					}
+					if ( $i + 2 < $length && 'c' === $body[ $i + 1 ] ) {
+						$i += 2;
+						continue;
+					}
+					++$i;
+					continue;
+				}
+				if ( '#' === $char ) {
+					$comment_end = $this->find_extended_comment_end( $body, $i + 1, $newline_mode, $utf );
+					if ( null === $comment_end ) {
+						break;
+					}
+					$i = $comment_end;
+					continue;
+				}
+				if ( '(' === $char && $i + 2 < $length && '?' === $body[ $i + 1 ] && '[' === $body[ $i + 2 ] ) {
+					++$ext_class_depth;
+					$i += 2;
+					continue;
+				}
+				if ( '[' === $char ) {
+					$in_class       = true;
+					$class_first    = true;
+					$class_negation = true;
+					continue;
+				}
+				if ( ']' === $char && $i + 1 < $length && ')' === $body[ $i + 1 ] ) {
+					--$ext_class_depth;
+					++$i;
+					continue;
+				}
+				continue;
+			}
+
+			if ( '\\' === $char ) {
+				if ( $i + 1 < $length && 'Q' === $body[ $i + 1 ] ) {
+					$in_quote = true;
+					++$i;
+					continue;
+				}
+				if ( $i + 2 < $length && 'c' === $body[ $i + 1 ] ) {
+					$i += 2;
+					continue;
+				}
+				++$i;
+				continue;
+			}
+
+			if ( '[' === $char ) {
+				$in_class       = true;
+				$class_first    = true;
+				$class_negation = true;
+				continue;
+			}
+
+			if ( '#' === $char && $current['x'] ) {
+				$comment_end = $this->find_extended_comment_end( $body, $i + 1, $newline_mode, $utf );
+				if ( null === $comment_end ) {
+					break;
+				}
+				$i = $comment_end;
+				continue;
+			}
+
+			if ( '(' === $char ) {
+				if ( $i + 2 < $length && '?' === $body[ $i + 1 ] && '[' === $body[ $i + 2 ] ) {
+					++$ext_class_depth;
+					$i += 2;
+					continue;
+				}
+				if ( $i + 1 < $length && '*' === $body[ $i + 1 ] ) {
+					$colon = strpos( $body, ':', $i + 2 );
+					$close = strpos( $body, ')', $i + 2 );
+					if ( false !== $colon && ( false === $close || $colon < $close ) ) {
+						$keyword = substr( $body, $i + 2, $colon - ( $i + 2 ) );
+						if ( isset( self::PATTERN_STAR_GROUPS[ $keyword ] ) ) {
+							$stack[] = $current;
+							$i       = $colon;
+							continue;
+						}
+					}
+					if ( false === $close ) {
+						break;
+					}
+					$verb = substr( $body, $i + 2, $close - ( $i + 2 ) );
+					if ( 'CR' === $verb || 'LF' === $verb || 'CRLF' === $verb || 'ANYCRLF' === $verb || 'ANY' === $verb || 'NUL' === $verb ) {
+						$newline_mode = $verb;
+					} elseif ( 'UTF' === $verb ) {
+						$utf = true;
+					}
+					$i = $close;
+					continue;
+				}
+				if ( $i + 2 < $length && '?' === $body[ $i + 1 ] && '#' === $body[ $i + 2 ] ) {
+					$comment_end = strpos( $body, ')', $i + 3 );
+					if ( false === $comment_end ) {
+						break;
+					}
+					$i = $comment_end;
+					continue;
+				}
+				if ( $i + 2 < $length && '?' === $body[ $i + 1 ] && 'C' === $body[ $i + 2 ] ) {
+					$callout_end = $this->find_callout_end( $body, $i + 3 );
+					if ( null === $callout_end ) {
+						break;
+					}
+					$i = $callout_end;
+					continue;
+				}
+
+				$inline = $this->parse_inline_modifiers( $body, $i, $current );
+				if ( null !== $inline ) {
+					if ( $inline['scoped'] ) {
+						$stack[] = $inline['state'];
+					} else {
+						$stack[ $top_index ] = $inline['state'];
+					}
+					$i = $inline['end'];
+					continue;
+				}
+
+				$stack[] = $current;
+				continue;
+			}
+
+			if ( ')' === $char ) {
+				if ( count( $stack ) > 1 ) {
+					array_pop( $stack );
+				}
+				continue;
+			}
+
+			if ( '$' === $char && ! $current['m'] ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Find the byte index of the end of an extended-mode (/x) "#" comment under the active
+	 * PCRE2 newline convention, returning null if the comment runs to the end of the pattern.
+	 *
+	 * @param string $body         Pattern body.
+	 * @param int    $from         First byte after "#".
+	 * @param string $newline_mode Active PCRE2 newline convention (LF, CR, CRLF, ANYCRLF, ANY).
+	 * @param bool   $utf          Whether UTF mode (/u or (*UTF)) is active.
+	 * @return int|null
+	 */
+	private function find_extended_comment_end( string $body, int $from, string $newline_mode, bool $utf ): ?int {
+		if ( 'LF' === $newline_mode ) {
+			$pos = strpos( $body, "\n", $from );
+			return false === $pos ? null : $pos;
+		}
+		if ( 'CR' === $newline_mode ) {
+			$pos = strpos( $body, "\r", $from );
+			return false === $pos ? null : $pos;
+		}
+		if ( 'NUL' === $newline_mode ) {
+			$pos = strpos( $body, "\0", $from );
+			return false === $pos ? null : $pos;
+		}
+		if ( 'CRLF' === $newline_mode ) {
+			$pos = strpos( $body, "\r\n", $from );
+			return false === $pos ? null : $pos + 1;
+		}
+
+		$candidates = array( "\n", "\r" );
+		if ( 'ANY' === $newline_mode ) {
+			$candidates[] = "\x0B";
+			$candidates[] = "\x0C";
+			if ( $utf ) {
+				$candidates[] = "\xC2\x85";
+				$candidates[] = "\xE2\x80\xA8";
+				$candidates[] = "\xE2\x80\xA9";
+			} else {
+				$candidates[] = "\x85";
+			}
+		}
+
+		$best = null;
+		foreach ( $candidates as $seq ) {
+			$pos = strpos( $body, $seq, $from );
+			if ( false === $pos ) {
+				continue;
+			}
+			$end = $pos + strlen( $seq ) - 1;
+			if ( null === $best || $pos < $best['pos'] ) {
+				$best = array(
+					'pos' => $pos,
+					'end' => $end,
+				);
+			}
+		}
+
+		return null === $best ? null : $best['end'];
+	}
+
+	/**
+	 * Find the closing ")" of a PCRE2 callout (?C), (?C123), or string callout (?C'...'),
+	 * skipping doubled closing delimiters inside quoted callout text.
+	 *
+	 * @param string $body Pattern body.
+	 * @param int    $from Byte index immediately after "(?C".
+	 * @return int|null
+	 */
+	private function find_callout_end( string $body, int $from ): ?int {
+		$length = strlen( $body );
+		if ( $from >= $length ) {
+			return null;
+		}
+
+		$delimiters = array(
+			'`' => '`',
+			"'" => "'",
+			'"' => '"',
+			'^' => '^',
+			'%' => '%',
+			'#' => '#',
+			'$' => '$',
+			'{' => '}',
+		);
+
+		$first = $body[ $from ];
+		if ( isset( $delimiters[ $first ] ) ) {
+			$close = $delimiters[ $first ];
+			for ( $i = $from + 1; $i < $length; ++$i ) {
+				if ( $body[ $i ] !== $close ) {
+					continue;
+				}
+				if ( $i + 1 < $length && $body[ $i + 1 ] === $close ) {
+					++$i;
+					continue;
+				}
+				if ( $i + 1 < $length && ')' === $body[ $i + 1 ] ) {
+					return $i + 1;
+				}
+				return null;
+			}
+			return null;
+		}
+
+		$close = strpos( $body, ')', $from );
+		return false === $close ? null : $close;
+	}
+
+	/**
+	 * Parse a PCRE inline modifier directive (?imsx-imsx) or scoped group (?imsx-imsx:...).
+	 *
+	 * @param string                       $body    Pattern body.
+	 * @param int                          $pos     Index of opening "(".
+	 * @param array{m:bool,x:bool,xx:bool} $current Active option state.
+	 * @return array{scoped:bool,state:array{m:bool,x:bool,xx:bool},end:int}|null
+	 */
+	private function parse_inline_modifiers( string $body, int $pos, array $current ): ?array {
+		$length = strlen( $body );
+		if ( $pos + 2 >= $length || '?' !== $body[ $pos + 1 ] ) {
+			return null;
+		}
+
+		$cursor = $pos + 2;
+		$state  = $current;
+		$enable = true;
+		$seen   = false;
+		$set    = array(
+			'm'  => false,
+			'x'  => false,
+			'xx' => false,
+		);
+		$unset  = array(
+			'm'  => false,
+			'x'  => false,
+			'xx' => false,
+		);
+
+		if ( '^' === $body[ $cursor ] ) {
+			$state['m']  = false;
+			$state['x']  = false;
+			$state['xx'] = false;
+			++$cursor;
+			$seen = true;
+		}
+
+		while ( $cursor < $length ) {
+			$ch = $body[ $cursor ];
+			if ( '-' === $ch ) {
+				if ( ! $enable ) {
+					return null;
+				}
+				$enable = false;
+				++$cursor;
+				continue;
+			}
+			if ( 'a' === $ch ) {
+				$seen = true;
+				++$cursor;
+				if ( $cursor < $length && false !== strpos( 'DPSTW', $body[ $cursor ] ) ) {
+					++$cursor;
+				}
+				continue;
+			}
+			if ( false !== strpos( 'imsxUJnr', $ch ) ) {
+				$seen = true;
+				if ( 'm' === $ch ) {
+					if ( $enable ) {
+						$set['m'] = true;
+					} else {
+						$unset['m'] = true;
+					}
+				} elseif ( 'x' === $ch ) {
+					$adjacent_x = $cursor + 1 < $length && 'x' === $body[ $cursor + 1 ];
+					if ( $enable ) {
+						$set['x'] = true;
+						if ( $adjacent_x ) {
+							$set['xx'] = true;
+						}
+					} else {
+						$unset['x']  = true;
+						$unset['xx'] = true;
+					}
+					if ( $adjacent_x ) {
+						++$cursor;
+					}
+				}
+				++$cursor;
+				continue;
+			}
+			if ( ( ')' === $ch || ':' === $ch ) && $seen ) {
+				if ( $set['x'] && ! $set['xx'] ) {
+					$unset['xx'] = true;
+				}
+				foreach ( array( 'm', 'x', 'xx' ) as $flag ) {
+					if ( $set[ $flag ] ) {
+						$state[ $flag ] = true;
+					}
+					if ( $unset[ $flag ] ) {
+						$state[ $flag ] = false;
+					}
+				}
+
+				return array(
+					'scoped' => ':' === $ch,
+					'state'  => $state,
+					'end'    => $cursor,
+				);
+			}
+			return null;
+		}
+
+		return null;
+	}
+}
