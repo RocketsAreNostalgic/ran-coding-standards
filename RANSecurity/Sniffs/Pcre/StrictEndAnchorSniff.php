@@ -711,7 +711,7 @@ final class StrictEndAnchorSniff implements Sniff {
 					++$i;
 					continue;
 				}
-				if ( $current['xx'] && ( ' ' === $char || "\t" === $char ) ) {
+				if ( ( $current['xx'] || $ext_class_depth > 0 ) && ( ' ' === $char || "\t" === $char ) ) {
 					continue;
 				}
 				if ( $class_negation && '^' === $char ) {
