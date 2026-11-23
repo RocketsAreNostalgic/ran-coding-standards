@@ -613,11 +613,34 @@ namespace LocalShadowScope {
 	}
 	preg_match( '/^shadowed$/', $value );
 }
+namespace ReopenedScope {
+	function preg_match( $p, $s ) {
+		return 0;
+	}
+}
+namespace ReopenedScope {
+	preg_match( '/^reopened-shadowed$/', $value );
+}
 PHP;
 list($security_status, $security_messages) = $security_pcre_run( $security_pcre_valid );
 if ( 0 !== $security_status || array() !== $security_messages ) {
 	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime. Encode machine-readable fixture data or CLI diagnostics without WordPress helpers.
 	fwrite( STDERR, 'Compliant PCRE patterns were rejected by RANSecurity: ' . json_encode( $security_messages ) . "\n" );
+	exit( 1 );
+}
+$security_pcre_reopened_semicolon          = <<<'PHP'
+<?php
+namespace SemiReopened;
+function preg_match( $p, $s ) {
+	return 0;
+}
+namespace SemiReopened;
+preg_match( '/^semi-reopened-shadowed$/', $value );
+PHP;
+list($security_status, $security_messages) = $security_pcre_run( $security_pcre_reopened_semicolon );
+if ( 0 !== $security_status || array() !== $security_messages ) {
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime. Encode machine-readable fixture data or CLI diagnostics without WordPress helpers.
+	fwrite( STDERR, 'Reopened semicolon namespace shadow was rejected by RANSecurity: ' . json_encode( $security_messages ) . "\n" );
 	exit( 1 );
 }
 $security_pcre_invalid                     = <<<'PHP'
@@ -628,7 +651,9 @@ namespace InvalidScope {
 }
 namespace GlobalAliasScope {
 	use function preg_match_all as preg_match;
+	use function preg_match_all as matches;
 	preg_match( '/^global-matcher-alias$/', $value );
+	matches( '/^ordinary-matcher-alias$/', $value );
 }
 namespace GlobalCases {
 	preg_match( '/^[0-9a-f]{40}$/i', $sha );
@@ -665,7 +690,7 @@ $/x',
 }
 PHP;
 list($security_status, $security_messages) = $security_pcre_run( $security_pcre_invalid );
-if ( 1 !== $security_status || 29 !== count( $security_messages ) ) {
+if ( 1 !== $security_status || 30 !== count( $security_messages ) ) {
 	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime. Encode machine-readable fixture data or CLI diagnostics without WordPress helpers.
 	fwrite( STDERR, 'Unanchored PCRE end-dollar patterns were missed by RANSecurity: ' . json_encode( $security_messages ) . "\n" );
 	exit( 1 );

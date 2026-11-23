@@ -11,6 +11,7 @@ use PHP_CodeSniffer\Files\File;
 use PHP_CodeSniffer\Sniffs\Sniff;
 use PHPCSUtils\Tokens\Collections;
 use PHPCSUtils\Utils\Context;
+use PHPCSUtils\Utils\Namespaces;
 use PHPCSUtils\Utils\PassedParameters;
 use PHPCSUtils\Utils\TextStrings;
 use PHPCSUtils\Utils\UseStatements;
@@ -85,8 +86,8 @@ final class StrictEndAnchorSniff implements Sniff {
 	 */
 	public function process( File $phpcs_file, $stack_ptr ) {
 		$tokens = $phpcs_file->getTokens();
-		$name   = strtolower( $tokens[ $stack_ptr ]['content'] );
-		if ( ! isset( self::TARGET_FUNCTIONS[ $name ] ) ) {
+		$next   = $this->find_non_empty( $tokens, $stack_ptr + 1, 1 );
+		if ( null === $next || 'T_OPEN_PARENTHESIS' !== $tokens[ $next ]['type'] ) {
 			return;
 		}
 
@@ -122,13 +123,23 @@ final class StrictEndAnchorSniff implements Sniff {
 			}
 		}
 
-		if ( ! $is_global_qualified && $this->is_aliased_to_non_global_function( $phpcs_file, $stack_ptr, $name ) ) {
-			return;
-		}
-
-		$next = $this->find_non_empty( $tokens, $stack_ptr + 1, 1 );
-		if ( null === $next || 'T_OPEN_PARENTHESIS' !== $tokens[ $next ]['type'] ) {
-			return;
+		$name = strtolower( $tokens[ $stack_ptr ]['content'] );
+		if ( $is_global_qualified ) {
+			if ( ! isset( self::TARGET_FUNCTIONS[ $name ] ) ) {
+				return;
+			}
+		} else {
+			$imported = $this->resolve_imported_function( $phpcs_file, $stack_ptr, $name );
+			if ( null !== $imported ) {
+				if ( ! isset( self::TARGET_FUNCTIONS[ $imported ] ) ) {
+					return;
+				}
+			} elseif (
+				! isset( self::TARGET_FUNCTIONS[ $name ] )
+				|| $this->has_same_namespace_function_declaration( $phpcs_file, $stack_ptr, $name )
+			) {
+				return;
+			}
 		}
 
 		$param = PassedParameters::getParameter( $phpcs_file, $stack_ptr, 1, 'pattern' );
@@ -169,15 +180,15 @@ final class StrictEndAnchorSniff implements Sniff {
 	}
 
 	/**
-	 * Determine whether an unqualified function name is imported via `use function` to a
-	 * non-global target (or a different global function) in the active namespace scope.
+	 * Resolve an unqualified call identifier against `use function` imports in the active
+	 * namespace block, returning the lowercased normalized target name or null if not imported.
 	 *
 	 * @param File   $phpcs_file The file being checked.
 	 * @param int    $stack_ptr  Call identifier token position.
 	 * @param string $name       Lowercased function name.
-	 * @return bool
+	 * @return string|null
 	 */
-	private function is_aliased_to_non_global_function( File $phpcs_file, int $stack_ptr, string $name ): bool {
+	private function resolve_imported_function( File $phpcs_file, int $stack_ptr, string $name ): ?string {
 		$tokens          = $phpcs_file->getTokens();
 		$active_ns_token = null;
 		$scope_start     = 0;
@@ -233,65 +244,49 @@ final class StrictEndAnchorSniff implements Sniff {
 			}
 		}
 
-		if ( null !== $explicit_import ) {
-			return ! isset( self::TARGET_FUNCTIONS[ $explicit_import ] );
-		}
-
-		return $this->has_same_namespace_function_declaration( $phpcs_file, $active_ns_token, $scope_start, $name );
+		return $explicit_import;
 	}
 
 	/**
-	 * Determine whether the active named namespace unconditionally declares a same-named function
-	 * in this file, shadowing PHP's global fallback for unqualified calls.
+	 * Determine whether any block of the active named namespace unconditionally declares
+	 * a same-named function in this file, shadowing PHP's global fallback for unqualified calls.
 	 *
-	 * @param File     $phpcs_file      The file being checked.
-	 * @param int|null $active_ns_token Enclosing braced T_NAMESPACE pointer, or null.
-	 * @param int      $scope_start     Start pointer of the active namespace scope.
-	 * @param string   $name            Lowercased function name.
+	 * @param File   $phpcs_file The file being checked.
+	 * @param int    $stack_ptr  Call identifier token position.
+	 * @param string $name       Lowercased function name.
 	 * @return bool
 	 */
-	private function has_same_namespace_function_declaration( File $phpcs_file, ?int $active_ns_token, int $scope_start, string $name ): bool {
-		$tokens = $phpcs_file->getTokens();
-		if ( null === $active_ns_token && ( ! isset( $tokens[ $scope_start ] ) || T_NAMESPACE !== $tokens[ $scope_start ]['code'] ) ) {
+	private function has_same_namespace_function_declaration( File $phpcs_file, int $stack_ptr, string $name ): bool {
+		$call_namespace = strtolower( Namespaces::determineNamespace( $phpcs_file, $stack_ptr ) );
+		if ( '' === $call_namespace ) {
 			return false;
 		}
 
-		$scope_end = count( $tokens ) - 1;
-		if ( null !== $active_ns_token && isset( $tokens[ $active_ns_token ]['scope_closer'] ) ) {
-			$scope_end = (int) $tokens[ $active_ns_token ]['scope_closer'];
-		} else {
-			for ( $i = $scope_start + 1; $i <= $scope_end; ++$i ) {
-				if ( T_NAMESPACE !== $tokens[ $i ]['code'] ) {
-					continue;
-				}
-				$after_ns = $this->find_non_empty( $tokens, $i + 1, 1 );
-				if ( null !== $after_ns && T_NS_SEPARATOR === $tokens[ $after_ns ]['code'] ) {
-					continue;
-				}
-				$scope_end = $i - 1;
-				break;
-			}
-		}
+		$tokens = $phpcs_file->getTokens();
+		$total  = count( $tokens );
 
-		$expected_conditions = null !== $active_ns_token
-			? array( $active_ns_token => T_NAMESPACE )
-			: array();
-
-		for ( $i = $scope_start; $i <= $scope_end; ++$i ) {
+		for ( $i = 0; $i < $total; ++$i ) {
 			if ( T_FUNCTION !== $tokens[ $i ]['code'] ) {
 				continue;
 			}
 			$conditions = isset( $tokens[ $i ]['conditions'] ) && is_array( $tokens[ $i ]['conditions'] )
 				? $tokens[ $i ]['conditions']
 				: array();
-			if ( $conditions !== $expected_conditions ) {
+			if ( count( $conditions ) > 1 || ( 1 === count( $conditions ) && T_NAMESPACE !== reset( $conditions ) ) ) {
 				continue;
 			}
 			$fn_name_ptr = $this->find_non_empty( $tokens, $i + 1, 1 );
 			if ( null !== $fn_name_ptr && 'T_BITWISE_AND' === $tokens[ $fn_name_ptr ]['type'] ) {
 				$fn_name_ptr = $this->find_non_empty( $tokens, $fn_name_ptr + 1, 1 );
 			}
-			if ( null !== $fn_name_ptr && T_STRING === $tokens[ $fn_name_ptr ]['code'] && strtolower( $tokens[ $fn_name_ptr ]['content'] ) === $name ) {
+			if (
+				null === $fn_name_ptr
+				|| T_STRING !== $tokens[ $fn_name_ptr ]['code']
+				|| strtolower( $tokens[ $fn_name_ptr ]['content'] ) !== $name
+			) {
+				continue;
+			}
+			if ( strtolower( Namespaces::determineNamespace( $phpcs_file, $i ) ) === $call_namespace ) {
 				return true;
 			}
 		}
