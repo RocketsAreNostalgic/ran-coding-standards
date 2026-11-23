@@ -69,6 +69,7 @@ final class StrictEndAnchorSniff implements Sniff {
 			if (
 				T_FUNCTION === $prev_code
 				|| T_CONST === $prev_code
+				|| T_NEW === $prev_code
 				|| isset( Collections::objectOperators()[ $prev_code ] )
 			) {
 				return;
@@ -77,7 +78,11 @@ final class StrictEndAnchorSniff implements Sniff {
 				$before_ns = $this->find_non_empty( $tokens, $prev - 1, -1 );
 				if (
 					null !== $before_ns
-					&& ( T_STRING === $tokens[ $before_ns ]['code'] || T_NAMESPACE === $tokens[ $before_ns ]['code'] )
+					&& (
+						T_STRING === $tokens[ $before_ns ]['code']
+						|| T_NAMESPACE === $tokens[ $before_ns ]['code']
+						|| T_NEW === $tokens[ $before_ns ]['code']
+					)
 				) {
 					return;
 				}
@@ -94,13 +99,13 @@ final class StrictEndAnchorSniff implements Sniff {
 			return;
 		}
 
-		$pattern_ptr = $this->single_literal_token( $phpcs_file, (int) $param['start'], (int) $param['end'] );
-		if ( null === $pattern_ptr ) {
+		$literal = $this->extract_single_literal( $phpcs_file, (int) $param['start'], (int) $param['end'] );
+		if ( null === $literal ) {
 			return;
 		}
 
-		$raw_pattern = $tokens[ $pattern_ptr ]['content'];
-		$pattern     = $this->decode_literal( $raw_pattern );
+		$pattern_ptr = $literal['ptr'];
+		$pattern     = $this->decode_literal( $literal['raw'] );
 		$parsed      = $this->split_pcre_pattern( $pattern );
 		if ( null === $parsed ) {
 			return;
@@ -126,28 +131,50 @@ final class StrictEndAnchorSniff implements Sniff {
 	}
 
 	/**
-	 * Return the token pointer when a parameter range contains exactly one constant string literal.
+	 * Extract one complete constant string literal (including physically multiline tokens)
+	 * from a parameter range.
 	 *
 	 * @param File $phpcs_file The file being checked.
 	 * @param int  $start      First token in the parameter.
 	 * @param int  $end        Last token in the parameter.
-	 * @return int|null
+	 * @return array{ptr:int,raw:string}|null
 	 */
-	private function single_literal_token( File $phpcs_file, int $start, int $end ): ?int {
-		$tokens  = $phpcs_file->getTokens();
-		$literal = null;
+	private function extract_single_literal( File $phpcs_file, int $start, int $end ): ?array {
+		$tokens          = $phpcs_file->getTokens();
+		$first           = null;
+		$last_str        = null;
+		$seen_binary_pfx = false;
+		$raw             = '';
 
 		for ( $i = $start; $i <= $end; ++$i ) {
+			if ( T_CONSTANT_ENCAPSED_STRING === $tokens[ $i ]['code'] ) {
+				if ( null === $first ) {
+					$first = $i;
+				} elseif ( $last_str + 1 !== $i ) {
+					return null;
+				}
+				$last_str = $i;
+				$raw     .= $tokens[ $i ]['content'];
+				continue;
+			}
+			if ( null === $first && ! $seen_binary_pfx && 'T_BINARY_CAST' === $tokens[ $i ]['type'] ) {
+				$seen_binary_pfx = true;
+				continue;
+			}
 			if ( $this->is_empty_token( $tokens[ $i ] ) ) {
 				continue;
 			}
-			if ( T_CONSTANT_ENCAPSED_STRING !== $tokens[ $i ]['code'] || null !== $literal ) {
-				return null;
-			}
-			$literal = $i;
+			return null;
 		}
 
-		return $literal;
+		if ( null === $first ) {
+			return null;
+		}
+
+		return array(
+			'ptr' => $first,
+			'raw' => $raw,
+		);
 	}
 
 	/**
@@ -192,6 +219,9 @@ final class StrictEndAnchorSniff implements Sniff {
 	 * @return string
 	 */
 	private function decode_literal( string $raw ): string {
+		if ( strlen( $raw ) >= 2 && ( 'b' === $raw[0] || 'B' === $raw[0] ) && ( "'" === $raw[1] || '"' === $raw[1] ) ) {
+			$raw = substr( $raw, 1 );
+		}
 		$unquoted = TextStrings::stripQuotes( $raw );
 		$length   = strlen( $unquoted );
 		if ( '' === $raw || "'" === $raw[0] ) {
@@ -231,7 +261,7 @@ final class StrictEndAnchorSniff implements Sniff {
 				++$i;
 				continue;
 			}
-			if ( 'x' === $next && $i + 2 < $length && ctype_xdigit( $unquoted[ $i + 2 ] ) ) {
+			if ( ( 'x' === $next || 'X' === $next ) && $i + 2 < $length && ctype_xdigit( $unquoted[ $i + 2 ] ) ) {
 				$hex = $unquoted[ $i + 2 ];
 				++$i;
 				if ( $i + 2 < $length && ctype_xdigit( $unquoted[ $i + 2 ] ) ) {
@@ -371,11 +401,12 @@ final class StrictEndAnchorSniff implements Sniff {
 	 * @return bool
 	 */
 	private function has_active_single_line_dollar( string $body, bool $initial_multiline, bool $initial_extended ): bool {
-		$length         = strlen( $body );
-		$in_quote       = false;
-		$in_class       = false;
-		$class_first    = false;
-		$class_negation = false;
+		$length          = strlen( $body );
+		$in_quote        = false;
+		$in_class        = false;
+		$class_first     = false;
+		$class_negation  = false;
+		$cr_ends_comment = false;
 		/** @var array<int, array{m:bool,x:bool}> $stack */
 		$stack = array(
 			array(
@@ -402,6 +433,12 @@ final class StrictEndAnchorSniff implements Sniff {
 						$class_first    = false;
 						$class_negation = false;
 						++$i;
+						continue;
+					}
+					if ( $i + 2 < $length && 'c' === $body[ $i + 1 ] ) {
+						$class_first    = false;
+						$class_negation = false;
+						$i             += 2;
 						continue;
 					}
 					$class_first    = false;
@@ -433,6 +470,12 @@ final class StrictEndAnchorSniff implements Sniff {
 			if ( '\\' === $char ) {
 				if ( $i + 1 < $length && 'Q' === $body[ $i + 1 ] ) {
 					$in_quote = true;
+					++$i;
+					continue;
+				}
+				if ( $i + 2 < $length && 'c' === $body[ $i + 1 ] ) {
+					$i += 2;
+					continue;
 				}
 				++$i;
 				continue;
@@ -449,15 +492,34 @@ final class StrictEndAnchorSniff implements Sniff {
 			$current   = $stack[ $top_index ];
 
 			if ( '#' === $char && $current['x'] ) {
-				$newline = strpos( $body, "\n", $i + 1 );
-				if ( false === $newline ) {
+				$lf = strpos( $body, "\n", $i + 1 );
+				$cr = $cr_ends_comment ? strpos( $body, "\r", $i + 1 ) : false;
+				if ( false === $lf && false === $cr ) {
 					break;
 				}
-				$i = $newline;
+				if ( false !== $lf && false !== $cr ) {
+					$i = min( $lf, $cr );
+				} else {
+					$i = false !== $lf ? $lf : (int) $cr;
+				}
 				continue;
 			}
 
 			if ( '(' === $char ) {
+				if ( $i + 1 < $length && '*' === $body[ $i + 1 ] ) {
+					$verb_end = strpos( $body, ')', $i + 2 );
+					if ( false === $verb_end ) {
+						break;
+					}
+					$verb = substr( $body, $i + 2, $verb_end - ( $i + 2 ) );
+					if ( 'CR' === $verb || 'ANYCRLF' === $verb || 'ANY' === $verb ) {
+						$cr_ends_comment = true;
+					} elseif ( 'LF' === $verb || 'CRLF' === $verb ) {
+						$cr_ends_comment = false;
+					}
+					$i = $verb_end;
+					continue;
+				}
 				if ( $i + 2 < $length && '?' === $body[ $i + 1 ] && '#' === $body[ $i + 2 ] ) {
 					$comment_end = strpos( $body, ')', $i + 3 );
 					if ( false === $comment_end ) {

@@ -584,11 +584,15 @@ preg_match( '/[]$]/', $char );
 preg_match( '/[^]$]/', $char );
 preg_match( '/[[:digit:]$]/', $char );
 preg_match( '/\Q$\E/', $price );
+preg_match( '/\c$/', $price );
+preg_match( '/(*MARK:price$)value/', $price );
 preg_match( '/(?#$)/', $price );
 preg_match( "/^prefix # comment $\n/x", $value );
 preg_match( '/^prefix/', $value );
 preg_match( $dynamic_pattern, $value );
 $matcher->preg_match( '/^foo$/', $value );
+new preg_match( '/^foo$/', $value );
+new \preg_match( '/^foo$/', $value );
 Tools\preg_match( '/^foo$/', $value );
 \Tools\preg_match( '/^foo$/', $value );
 namespace\preg_match( '/^foo$/', $value );
@@ -608,20 +612,30 @@ preg_match_all( '~^item$~', $list );
 preg_match( "/^foo\$/", $value );
 preg_match( "/^foo\\\\$/", $value );
 preg_match( "/^foo\x24/", $value );
+preg_match( "/^foo\X24/", $value );
+preg_match( b'/^binary$/', $value );
 preg_match( '/\A(?:a|b$)/', $value );
 preg_match( '/\Q[\Evalue$/', $value );
+preg_match( '/\c$value$/', $value );
+preg_match( '/(*MARK:price$)value$/', $value );
 preg_match( '/[]$]+value$/', $value );
 preg_match( '/[^]$]+value$/', $value );
 preg_match( '/[[:digit:]$]+value$/', $value );
-preg_match( '/(?#$)+value$/', $value );
+preg_match( '/(?#$)value$/', $value );
 preg_match( "/^value # comment\n$/x", $value );
+preg_match( "/(*CR)^value # comment\r$/x", $value );
+preg_match(
+	'/^value # multiline comment
+$/x',
+	$value
+);
 preg_match( '/(?-m:^value$)/m', $value );
 preg_match( '/(?-m)^value$/m', $value );
 preg_match( '/(?m:^a$)|b$/', $value );
 preg_match( subject: $value, pattern: '/^named$/' );
 PHP;
 list($security_status, $security_messages) = $security_pcre_run( $security_pcre_invalid );
-if ( 1 !== $security_status || 17 !== count( $security_messages ) ) {
+if ( 1 !== $security_status || 23 !== count( $security_messages ) ) {
 	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime. Encode machine-readable fixture data or CLI diagnostics without WordPress helpers.
 	fwrite( STDERR, 'Unanchored PCRE end-dollar patterns were missed by RANSecurity: ' . json_encode( $security_messages ) . "\n" );
 	exit( 1 );
