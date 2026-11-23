@@ -69,6 +69,18 @@ final class StrictEndAnchorSniff implements Sniff {
 	);
 
 	/**
+	 * Cached per-file index of function imports and namespace-level shadowing declarations.
+	 *
+	 * @var array{
+	 *     file_key:string,
+	 *     has_target_alias:bool,
+	 *     imports:array<int, array<string, list<array{pos:int,target:string}>>>,
+	 *     shadowed:array<string, array<string, bool>>
+	 * }|null
+	 */
+	private $file_index = null;
+
+	/**
 	 * Register function-call identifier tokens.
 	 *
 	 * @return array<int>
@@ -109,36 +121,43 @@ final class StrictEndAnchorSniff implements Sniff {
 			}
 			if ( T_NS_SEPARATOR === $prev_code ) {
 				$before_ns = $this->find_non_empty( $tokens, $prev - 1, -1 );
-				if (
-					null !== $before_ns
-					&& (
-						T_STRING === $tokens[ $before_ns ]['code']
-						|| T_NAMESPACE === $tokens[ $before_ns ]['code']
-						|| T_NEW === $tokens[ $before_ns ]['code']
-					)
-				) {
-					return;
+				if ( null !== $before_ns ) {
+					$before_code = $tokens[ $before_ns ]['code'];
+					if ( T_STRING === $before_code || T_NEW === $before_code ) {
+						return;
+					}
+					if ( T_NAMESPACE === $before_code ) {
+						if ( '' !== Namespaces::determineNamespace( $phpcs_file, $stack_ptr ) ) {
+							return;
+						}
+					}
 				}
 				$is_global_qualified = true;
 			}
 		}
 
-		$name = strtolower( $tokens[ $stack_ptr ]['content'] );
+		$name  = strtolower( $tokens[ $stack_ptr ]['content'] );
+		$index = $this->get_file_index( $phpcs_file );
 		if ( $is_global_qualified ) {
 			if ( ! isset( self::TARGET_FUNCTIONS[ $name ] ) ) {
 				return;
 			}
 		} else {
-			$imported = $this->resolve_imported_function( $phpcs_file, $stack_ptr, $name );
+			if ( ! isset( self::TARGET_FUNCTIONS[ $name ] ) && ! $index['has_target_alias'] ) {
+				return;
+			}
+			$imported = $this->resolve_imported_function( $phpcs_file, $stack_ptr, $name, $index['imports'] );
 			if ( null !== $imported ) {
 				if ( ! isset( self::TARGET_FUNCTIONS[ $imported ] ) ) {
 					return;
 				}
-			} elseif (
-				! isset( self::TARGET_FUNCTIONS[ $name ] )
-				|| $this->has_same_namespace_function_declaration( $phpcs_file, $stack_ptr, $name )
-			) {
+			} elseif ( ! isset( self::TARGET_FUNCTIONS[ $name ] ) ) {
 				return;
+			} else {
+				$call_namespace = strtolower( Namespaces::determineNamespace( $phpcs_file, $stack_ptr ) );
+				if ( '' !== $call_namespace && isset( $index['shadowed'][ $call_namespace ][ $name ] ) ) {
+					return;
+				}
 			}
 		}
 
@@ -180,118 +199,165 @@ final class StrictEndAnchorSniff implements Sniff {
 	}
 
 	/**
-	 * Resolve an unqualified call identifier against `use function` imports in the active
-	 * namespace block, returning the lowercased normalized target name or null if not imported.
+	 * Build or return the single-pass per-file index of `use function` imports and
+	 * unconditional namespace-level function declarations shadowing target matchers.
 	 *
-	 * @param File   $phpcs_file The file being checked.
-	 * @param int    $stack_ptr  Call identifier token position.
-	 * @param string $name       Lowercased function name.
-	 * @return string|null
+	 * @param File $phpcs_file The file being checked.
+	 * @return array{
+	 *     file_key:string,
+	 *     has_target_alias:bool,
+	 *     imports:array<int, array<string, list<array{pos:int,target:string}>>>,
+	 *     shadowed:array<string, array<string, bool>>
+	 * }
 	 */
-	private function resolve_imported_function( File $phpcs_file, int $stack_ptr, string $name ): ?string {
-		$tokens          = $phpcs_file->getTokens();
-		$active_ns_token = null;
-		$scope_start     = 0;
-
-		if ( isset( $tokens[ $stack_ptr ]['conditions'] ) && is_array( $tokens[ $stack_ptr ]['conditions'] ) ) {
-			foreach ( $tokens[ $stack_ptr ]['conditions'] as $cond_ptr => $cond_code ) {
-				if ( T_NAMESPACE === $cond_code ) {
-					$active_ns_token = (int) $cond_ptr;
-					$scope_start     = (int) $cond_ptr;
-				}
-			}
+	private function get_file_index( File $phpcs_file ): array {
+		$tokens   = $phpcs_file->getTokens();
+		$file_key = spl_object_id( $phpcs_file ) . ':' . $phpcs_file->getFilename() . ':' . count( $tokens );
+		if ( null !== $this->file_index && $this->file_index['file_key'] === $file_key ) {
+			return $this->file_index;
 		}
 
-		if ( null === $active_ns_token ) {
-			for ( $i = $stack_ptr - 1; $i >= 0; --$i ) {
-				if ( T_NAMESPACE !== $tokens[ $i ]['code'] ) {
-					continue;
-				}
+		$has_target_alias = false;
+		/** @var array<int, array<string, list<array{pos:int,target:string}>>> $imports */
+		$imports = array();
+		/** @var array<string, array<string, bool>> $shadowed */
+		$shadowed          = array();
+		$current_ns_key    = 0;
+		$current_ns_name   = '';
+		$current_ns_closer = null;
+		$total             = count( $tokens );
+
+		for ( $i = 0; $i < $total; ++$i ) {
+			if ( null !== $current_ns_closer && $i > $current_ns_closer ) {
+				$current_ns_key    = 0;
+				$current_ns_name   = '';
+				$current_ns_closer = null;
+			}
+
+			$code = $tokens[ $i ]['code'];
+			if ( T_NAMESPACE === $code ) {
 				$after_ns = $this->find_non_empty( $tokens, $i + 1, 1 );
 				if ( null !== $after_ns && T_NS_SEPARATOR === $tokens[ $after_ns ]['code'] ) {
 					continue;
 				}
-				$scope_start = $i;
-				break;
+				$current_ns_key    = $i;
+				$declared_ns       = Namespaces::getDeclaredName( $phpcs_file, $i );
+				$current_ns_name   = is_string( $declared_ns ) ? strtolower( $declared_ns ) : '';
+				$current_ns_closer = isset( $tokens[ $i ]['scope_closer'] ) ? (int) $tokens[ $i ]['scope_closer'] : null;
+				if ( ! isset( $imports[ $current_ns_key ] ) ) {
+					$imports[ $current_ns_key ] = array();
+				}
+				continue;
 			}
-		}
 
-		$explicit_import = null;
-		for ( $i = $scope_start; $i < $stack_ptr; ++$i ) {
-			if ( T_USE !== $tokens[ $i ]['code'] ) {
-				continue;
-			}
-			if ( ! UseStatements::isImportUse( $phpcs_file, $i ) ) {
-				continue;
-			}
-			if ( null !== $active_ns_token ) {
+			if ( T_USE === $code ) {
+				if ( ! UseStatements::isImportUse( $phpcs_file, $i ) ) {
+					continue;
+				}
 				$use_conditions = isset( $tokens[ $i ]['conditions'] ) && is_array( $tokens[ $i ]['conditions'] )
 					? $tokens[ $i ]['conditions']
 					: array();
-				if ( ! isset( $use_conditions[ $active_ns_token ] ) ) {
+				if ( null !== $current_ns_closer ) {
+					if ( ! isset( $use_conditions[ $current_ns_key ] ) || count( $use_conditions ) > 1 ) {
+						continue;
+					}
+				} elseif ( array() !== $use_conditions ) {
 					continue;
 				}
-			} elseif ( isset( $tokens[ $i ]['conditions'] ) && is_array( $tokens[ $i ]['conditions'] ) && array() !== $tokens[ $i ]['conditions'] ) {
+
+				$split = UseStatements::splitImportUseStatement( $phpcs_file, $i );
+				foreach ( $split['function'] as $alias => $target ) {
+					$alias_key         = strtolower( $alias );
+					$normalized_target = strtolower( ltrim( $target, '\\' ) );
+					if ( isset( self::TARGET_FUNCTIONS[ $normalized_target ] ) ) {
+						$has_target_alias = true;
+					}
+					$imports[ $current_ns_key ][ $alias_key ][] = array(
+						'pos'    => $i,
+						'target' => $normalized_target,
+					);
+				}
 				continue;
 			}
 
-			$split = UseStatements::splitImportUseStatement( $phpcs_file, $i );
-			foreach ( $split['function'] as $alias => $target ) {
-				if ( strtolower( $alias ) !== $name ) {
+			if ( T_FUNCTION === $code && '' !== $current_ns_name ) {
+				$conditions = isset( $tokens[ $i ]['conditions'] ) && is_array( $tokens[ $i ]['conditions'] )
+					? $tokens[ $i ]['conditions']
+					: array();
+				if ( count( $conditions ) > 1 || ( 1 === count( $conditions ) && T_NAMESPACE !== reset( $conditions ) ) ) {
 					continue;
 				}
-				$explicit_import = strtolower( ltrim( $target, '\\' ) );
+				$fn_name_ptr = $this->find_non_empty( $tokens, $i + 1, 1 );
+				if ( null !== $fn_name_ptr && 'T_BITWISE_AND' === $tokens[ $fn_name_ptr ]['type'] ) {
+					$fn_name_ptr = $this->find_non_empty( $tokens, $fn_name_ptr + 1, 1 );
+				}
+				if ( null !== $fn_name_ptr && T_STRING === $tokens[ $fn_name_ptr ]['code'] ) {
+					$fn_name = strtolower( $tokens[ $fn_name_ptr ]['content'] );
+					if ( isset( self::TARGET_FUNCTIONS[ $fn_name ] ) ) {
+						$shadowed[ $current_ns_name ][ $fn_name ] = true;
+					}
+				}
 			}
 		}
 
-		return $explicit_import;
+		$this->file_index = array(
+			'file_key'         => $file_key,
+			'has_target_alias' => $has_target_alias,
+			'imports'          => $imports,
+			'shadowed'         => $shadowed,
+		);
+
+		return $this->file_index;
 	}
 
 	/**
-	 * Determine whether any block of the active named namespace unconditionally declares
-	 * a same-named function in this file, shadowing PHP's global fallback for unqualified calls.
+	 * Resolve an unqualified call identifier against indexed `use function` imports in the
+	 * active namespace block, returning the lowercased normalized target name or null.
 	 *
-	 * @param File   $phpcs_file The file being checked.
-	 * @param int    $stack_ptr  Call identifier token position.
-	 * @param string $name       Lowercased function name.
-	 * @return bool
+	 * @param File                                                                $phpcs_file The file being checked.
+	 * @param int                                                                 $stack_ptr  Call identifier token position.
+	 * @param string                                                              $name       Lowercased function name.
+	 * @param array<int, array<string, list<array{pos:int,target:string}>>>       $imports    Per-namespace-block import table.
+	 * @return string|null
 	 */
-	private function has_same_namespace_function_declaration( File $phpcs_file, int $stack_ptr, string $name ): bool {
-		$call_namespace = strtolower( Namespaces::determineNamespace( $phpcs_file, $stack_ptr ) );
-		if ( '' === $call_namespace ) {
-			return false;
+	private function resolve_imported_function( File $phpcs_file, int $stack_ptr, string $name, array $imports ): ?string {
+		if ( array() === $imports ) {
+			return null;
 		}
 
-		$tokens = $phpcs_file->getTokens();
-		$total  = count( $tokens );
+		$tokens      = $phpcs_file->getTokens();
+		$scope_key   = 0;
+		$found_brace = false;
 
-		for ( $i = 0; $i < $total; ++$i ) {
-			if ( T_FUNCTION !== $tokens[ $i ]['code'] ) {
-				continue;
-			}
-			$conditions = isset( $tokens[ $i ]['conditions'] ) && is_array( $tokens[ $i ]['conditions'] )
-				? $tokens[ $i ]['conditions']
-				: array();
-			if ( count( $conditions ) > 1 || ( 1 === count( $conditions ) && T_NAMESPACE !== reset( $conditions ) ) ) {
-				continue;
-			}
-			$fn_name_ptr = $this->find_non_empty( $tokens, $i + 1, 1 );
-			if ( null !== $fn_name_ptr && 'T_BITWISE_AND' === $tokens[ $fn_name_ptr ]['type'] ) {
-				$fn_name_ptr = $this->find_non_empty( $tokens, $fn_name_ptr + 1, 1 );
-			}
-			if (
-				null === $fn_name_ptr
-				|| T_STRING !== $tokens[ $fn_name_ptr ]['code']
-				|| strtolower( $tokens[ $fn_name_ptr ]['content'] ) !== $name
-			) {
-				continue;
-			}
-			if ( strtolower( Namespaces::determineNamespace( $phpcs_file, $i ) ) === $call_namespace ) {
-				return true;
+		if ( isset( $tokens[ $stack_ptr ]['conditions'] ) && is_array( $tokens[ $stack_ptr ]['conditions'] ) ) {
+			foreach ( $tokens[ $stack_ptr ]['conditions'] as $cond_ptr => $cond_code ) {
+				if ( T_NAMESPACE === $cond_code ) {
+					$scope_key   = (int) $cond_ptr;
+					$found_brace = true;
+				}
 			}
 		}
 
-		return false;
+		if ( ! $found_brace ) {
+			foreach ( array_keys( $imports ) as $ns_key ) {
+				if ( $ns_key <= $stack_ptr && $ns_key > $scope_key ) {
+					$scope_key = $ns_key;
+				}
+			}
+		}
+
+		if ( ! isset( $imports[ $scope_key ][ $name ] ) ) {
+			return null;
+		}
+
+		$resolved = null;
+		foreach ( $imports[ $scope_key ][ $name ] as $entry ) {
+			if ( $entry['pos'] < $stack_ptr ) {
+				$resolved = $entry['target'];
+			}
+		}
+
+		return $resolved;
 	}
 
 	/**

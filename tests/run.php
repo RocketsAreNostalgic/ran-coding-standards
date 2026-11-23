@@ -570,7 +570,7 @@ $security_pcre_run                         = static function ( string $contents 
 	}
 	return array( $status, $messages );
 };
-$security_pcre_valid                       = <<<'PHP'
+$security_pcre_valid_global                = <<<'PHP'
 <?php
 preg_match( '/\A[0-9a-f]{40}\z/iD', $sha );
 preg_match( '/^[0-9a-f]{40}$/iD', $sha );
@@ -599,10 +599,22 @@ new preg_match( '/^foo$/', $value );
 new \preg_match( '/^foo$/', $value );
 Tools\preg_match( '/^foo$/', $value );
 \Tools\preg_match( '/^foo$/', $value );
-namespace\preg_match( '/^foo$/', $value );
 #[\preg_match( '/^foo$/' )]
 #[preg_match( '/^foo$/' )]
 class Wrapper { public function preg_match( $p, $s ) {} }
+PHP;
+list($security_status, $security_messages) = $security_pcre_run( $security_pcre_valid_global );
+if ( 0 !== $security_status || array() !== $security_messages ) {
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime. Encode machine-readable fixture data or CLI diagnostics without WordPress helpers.
+	fwrite( STDERR, 'Compliant global PCRE patterns were rejected by RANSecurity: ' . json_encode( $security_messages ) . "\n" );
+	exit( 1 );
+}
+$security_pcre_valid_namespaced            = <<<'PHP'
+<?php
+namespace NamedRelative {
+	namespace\preg_match( '/^foo$/', $value );
+	namespace\preg_match_all( '/^foo$/', $value );
+}
 namespace AliasedScope {
 	use function Demo\other as preg_match;
 	preg_match( '/^aliased$/', $value );
@@ -622,10 +634,10 @@ namespace ReopenedScope {
 	preg_match( '/^reopened-shadowed$/', $value );
 }
 PHP;
-list($security_status, $security_messages) = $security_pcre_run( $security_pcre_valid );
+list($security_status, $security_messages) = $security_pcre_run( $security_pcre_valid_namespaced );
 if ( 0 !== $security_status || array() !== $security_messages ) {
 	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime. Encode machine-readable fixture data or CLI diagnostics without WordPress helpers.
-	fwrite( STDERR, 'Compliant PCRE patterns were rejected by RANSecurity: ' . json_encode( $security_messages ) . "\n" );
+	fwrite( STDERR, 'Compliant namespaced PCRE patterns were rejected by RANSecurity: ' . json_encode( $security_messages ) . "\n" );
 	exit( 1 );
 }
 $security_pcre_reopened_semicolon          = <<<'PHP'
@@ -645,6 +657,10 @@ if ( 0 !== $security_status || array() !== $security_messages ) {
 }
 $security_pcre_invalid                     = <<<'PHP'
 <?php
+namespace {
+	namespace\preg_match( '/^global-ns-rel$/', $value );
+	namespace\preg_match_all( '/^global-ns-rel-all$/', $value );
+}
 namespace InvalidScope {
 	use function Demo\other as preg_match;
 	\preg_match( '/^global-despite-alias$/', $value );
@@ -690,7 +706,7 @@ $/x',
 }
 PHP;
 list($security_status, $security_messages) = $security_pcre_run( $security_pcre_invalid );
-if ( 1 !== $security_status || 30 !== count( $security_messages ) ) {
+if ( 1 !== $security_status || 32 !== count( $security_messages ) ) {
 	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime. Encode machine-readable fixture data or CLI diagnostics without WordPress helpers.
 	fwrite( STDERR, 'Unanchored PCRE end-dollar patterns were missed by RANSecurity: ' . json_encode( $security_messages ) . "\n" );
 	exit( 1 );
