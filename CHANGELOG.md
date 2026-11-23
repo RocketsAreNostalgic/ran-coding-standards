@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/RocketsAreNostalgic/ran-coding-standards/compare/v1.0.3...v1.1.0) (2026-11-23)
+
+
+### Features
+
+* **security:** add opt-in RANSecurity strict PCRE anchor sniff ([#22](https://github.com/RocketsAreNostalgic/ran-coding-standards/issues/22)) ([61df34e](https://github.com/RocketsAreNostalgic/ran-coding-standards/commit/61df34ec0a4c0ec70c9f03fd85e8f5ba28bc4722))
+
 ## [1.0.3](https://github.com/RocketsAreNostalgic/ran-coding-standards/compare/v1.0.2...v1.0.3) (2026-10-09)
 
 
