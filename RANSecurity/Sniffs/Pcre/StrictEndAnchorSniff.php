@@ -187,12 +187,10 @@ final class StrictEndAnchorSniff implements Sniff {
 			return;
 		}
 
-		$initial_multiline     = false !== strpos( $modifiers, 'm' );
-		$x_modifier_count      = substr_count( $modifiers, 'x' );
-		$initial_extended      = $x_modifier_count >= 1;
-		$initial_extended_more = $x_modifier_count >= 2;
-		$initial_utf           = false !== strpos( $modifiers, 'u' );
-		if ( ! $this->has_active_single_line_dollar( $body, $initial_multiline, $initial_extended, $initial_extended_more, $initial_utf ) ) {
+		$initial_multiline = false !== strpos( $modifiers, 'm' );
+		$initial_extended  = false !== strpos( $modifiers, 'x' );
+		$initial_utf       = false !== strpos( $modifiers, 'u' );
+		if ( ! $this->has_active_single_line_dollar( $body, $initial_multiline, $initial_extended, $initial_utf ) ) {
 			return;
 		}
 
@@ -649,14 +647,13 @@ final class StrictEndAnchorSniff implements Sniff {
 	 * character classes (including leading "]" and POSIX classes), comments, newline verbs,
 	 * pattern-bearing (*keyword:...) groups, and inline modifiers.
 	 *
-	 * @param string $body                  PCRE pattern body without delimiters.
-	 * @param bool   $initial_multiline     Whether trailing /m is active initially.
-	 * @param bool   $initial_extended      Whether trailing /x is active initially.
-	 * @param bool   $initial_extended_more Whether trailing /xx is active initially.
-	 * @param bool   $initial_utf           Whether trailing /u is active initially.
+	 * @param string $body              PCRE pattern body without delimiters.
+	 * @param bool   $initial_multiline Whether trailing /m is active initially.
+	 * @param bool   $initial_extended  Whether trailing /x is active initially.
+	 * @param bool   $initial_utf       Whether trailing /u is active initially.
 	 * @return bool
 	 */
-	private function has_active_single_line_dollar( string $body, bool $initial_multiline, bool $initial_extended, bool $initial_extended_more, bool $initial_utf ): bool {
+	private function has_active_single_line_dollar( string $body, bool $initial_multiline, bool $initial_extended, bool $initial_utf ): bool {
 		$length         = strlen( $body );
 		$in_quote       = false;
 		$in_class       = false;
@@ -669,7 +666,7 @@ final class StrictEndAnchorSniff implements Sniff {
 			array(
 				'm'  => $initial_multiline,
 				'x'  => $initial_extended,
-				'xx' => $initial_extended_more,
+				'xx' => false,
 			),
 		);
 
@@ -695,6 +692,10 @@ final class StrictEndAnchorSniff implements Sniff {
 				if ( '\\' === $char ) {
 					if ( $i + 1 < $length && 'Q' === $body[ $i + 1 ] ) {
 						$in_quote = true;
+						++$i;
+						continue;
+					}
+					if ( $i + 1 < $length && 'E' === $body[ $i + 1 ] ) {
 						++$i;
 						continue;
 					}
@@ -955,11 +956,10 @@ final class StrictEndAnchorSniff implements Sniff {
 			return null;
 		}
 
-		$cursor  = $pos + 2;
-		$state   = $current;
-		$enable  = true;
-		$seen    = false;
-		$x_count = 0;
+		$cursor = $pos + 2;
+		$state  = $current;
+		$enable = true;
+		$seen   = false;
 
 		if ( '^' === $body[ $cursor ] ) {
 			$state['m']  = false;
@@ -992,14 +992,16 @@ final class StrictEndAnchorSniff implements Sniff {
 				if ( 'm' === $ch ) {
 					$state['m'] = $enable;
 				} elseif ( 'x' === $ch ) {
+					$adjacent_x = $cursor + 1 < $length && 'x' === $body[ $cursor + 1 ];
 					if ( $enable ) {
-						++$x_count;
 						$state['x']  = true;
-						$state['xx'] = $x_count >= 2;
+						$state['xx'] = $adjacent_x;
 					} else {
-						$x_count     = 0;
 						$state['x']  = false;
 						$state['xx'] = false;
+					}
+					if ( $adjacent_x ) {
+						++$cursor;
 					}
 				}
 				++$cursor;
