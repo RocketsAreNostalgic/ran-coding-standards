@@ -73,6 +73,15 @@ final class StrictEndAnchorSniff implements Sniff {
 			) {
 				return;
 			}
+			if ( T_NS_SEPARATOR === $prev_code ) {
+				$before_ns = $this->find_non_empty( $tokens, $prev - 1, -1 );
+				if (
+					null !== $before_ns
+					&& ( T_STRING === $tokens[ $before_ns ]['code'] || T_NAMESPACE === $tokens[ $before_ns ]['code'] )
+				) {
+					return;
+				}
+			}
 		}
 
 		$next = $this->find_non_empty( $tokens, $stack_ptr + 1, 1 );
@@ -99,11 +108,13 @@ final class StrictEndAnchorSniff implements Sniff {
 
 		$body      = $parsed['body'];
 		$modifiers = $parsed['modifiers'];
-		if ( false !== strpos( $modifiers, 'm' ) || false !== strpos( $modifiers, 'D' ) ) {
+		if ( false !== strpos( $modifiers, 'D' ) ) {
 			return;
 		}
 
-		if ( ! $this->has_unescaped_end_dollar( $body ) ) {
+		$initial_multiline = false !== strpos( $modifiers, 'm' );
+		$initial_extended  = false !== strpos( $modifiers, 'x' );
+		if ( ! $this->has_active_single_line_dollar( $body, $initial_multiline, $initial_extended ) ) {
 			return;
 		}
 
@@ -175,18 +186,124 @@ final class StrictEndAnchorSniff implements Sniff {
 	}
 
 	/**
-	 * Unquote a PHP constant string literal, preserving PCRE escapes accurately.
+	 * Decode a PHP single- or double-quoted constant string literal in one pass.
 	 *
 	 * @param string $raw Raw token content including surrounding quotes.
 	 * @return string
 	 */
 	private function decode_literal( string $raw ): string {
 		$unquoted = TextStrings::stripQuotes( $raw );
+		$length   = strlen( $unquoted );
 		if ( '' === $raw || "'" === $raw[0] ) {
-			return str_replace( array( '\\\\', "\\'" ), array( '\\', "'" ), $unquoted );
+			$result = '';
+			for ( $i = 0; $i < $length; ++$i ) {
+				if ( '\\' === $unquoted[ $i ] && $i + 1 < $length && ( '\\' === $unquoted[ $i + 1 ] || "'" === $unquoted[ $i + 1 ] ) ) {
+					$result .= $unquoted[ $i + 1 ];
+					++$i;
+					continue;
+				}
+				$result .= $unquoted[ $i ];
+			}
+			return $result;
 		}
 
-		return str_replace( array( '\\\\', '\\"', '\\$' ), array( '\\', '"', '$' ), $unquoted );
+		$simple_escapes = array(
+			'n'  => "\n",
+			'r'  => "\r",
+			't'  => "\t",
+			'v'  => "\v",
+			'e'  => "\e",
+			'f'  => "\f",
+			'\\' => '\\',
+			'"'  => '"',
+			'$'  => '$',
+		);
+
+		$result = '';
+		for ( $i = 0; $i < $length; ++$i ) {
+			if ( '\\' !== $unquoted[ $i ] || $i + 1 >= $length ) {
+				$result .= $unquoted[ $i ];
+				continue;
+			}
+			$next = $unquoted[ $i + 1 ];
+			if ( isset( $simple_escapes[ $next ] ) ) {
+				$result .= $simple_escapes[ $next ];
+				++$i;
+				continue;
+			}
+			if ( 'x' === $next && $i + 2 < $length && ctype_xdigit( $unquoted[ $i + 2 ] ) ) {
+				$hex = $unquoted[ $i + 2 ];
+				++$i;
+				if ( $i + 2 < $length && ctype_xdigit( $unquoted[ $i + 2 ] ) ) {
+					$hex .= $unquoted[ $i + 2 ];
+					++$i;
+				}
+				++$i;
+				$result .= chr( (int) hexdec( $hex ) );
+				continue;
+			}
+			if ( $next >= '0' && $next <= '7' ) {
+				$oct = $next;
+				++$i;
+				for ( $k = 0; $k < 2 && $i + 1 < $length; ++$k ) {
+					$digit = $unquoted[ $i + 1 ];
+					if ( $digit < '0' || $digit > '7' ) {
+						break;
+					}
+					$oct .= $digit;
+					++$i;
+				}
+				$result .= chr( (int) octdec( $oct ) & 0xFF );
+				continue;
+			}
+			if ( 'u' === $next && $i + 2 < $length && '{' === $unquoted[ $i + 2 ] ) {
+				$close_brace = strpos( $unquoted, '}', $i + 3 );
+				if ( false !== $close_brace ) {
+					$hex = substr( $unquoted, $i + 3, $close_brace - ( $i + 3 ) );
+					if ( '' !== $hex && ctype_xdigit( $hex ) ) {
+						$codepoint = (int) hexdec( $hex );
+						$encoded   = $this->encode_utf8_codepoint( $codepoint );
+						if ( null !== $encoded ) {
+							$result .= $encoded;
+							$i       = $close_brace;
+							continue;
+						}
+					}
+				}
+			}
+			$result .= '\\' . $next;
+			++$i;
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Encode a Unicode scalar value to UTF-8 bytes without requiring ext-mbstring.
+	 *
+	 * @param int $codepoint Unicode code point.
+	 * @return string|null
+	 */
+	private function encode_utf8_codepoint( int $codepoint ): ?string {
+		if ( $codepoint < 0 || $codepoint > 0x10FFFF || ( $codepoint >= 0xD800 && $codepoint <= 0xDFFF ) ) {
+			return null;
+		}
+		if ( $codepoint <= 0x7F ) {
+			return chr( $codepoint );
+		}
+		if ( $codepoint <= 0x7FF ) {
+			return chr( 0xC0 | ( $codepoint >> 6 ) ) . chr( 0x80 | ( $codepoint & 0x3F ) );
+		}
+		if ( $codepoint <= 0xFFFF ) {
+			return chr( 0xE0 | ( $codepoint >> 12 ) )
+				. chr( 0x80 | ( ( $codepoint >> 6 ) & 0x3F ) )
+				. chr( 0x80 | ( $codepoint & 0x3F ) );
+		}
+
+		return chr( 0xF0 | ( $codepoint >> 18 ) )
+			. chr( 0x80 | ( ( $codepoint >> 12 ) & 0x3F ) )
+			. chr( 0x80 | ( ( $codepoint >> 6 ) & 0x3F ) )
+			. chr( 0x80 | ( $codepoint & 0x3F ) );
 	}
 
 	/**
@@ -245,41 +362,204 @@ final class StrictEndAnchorSniff implements Sniff {
 	}
 
 	/**
-	 * Detect an unescaped "$" anchor outside character classes.
+	 * Detect an active non-multiline "$" anchor while respecting escapes, \Q...\E,
+	 * character classes (including leading "]" and POSIX classes), comments, and inline modifiers.
 	 *
-	 * @param string $body PCRE pattern body without delimiters.
+	 * @param string $body              PCRE pattern body without delimiters.
+	 * @param bool   $initial_multiline Whether trailing /m is active initially.
+	 * @param bool   $initial_extended  Whether trailing /x is active initially.
 	 * @return bool
 	 */
-	private function has_unescaped_end_dollar( string $body ): bool {
-		$length   = strlen( $body );
-		$escaped  = false;
-		$in_class = false;
+	private function has_active_single_line_dollar( string $body, bool $initial_multiline, bool $initial_extended ): bool {
+		$length         = strlen( $body );
+		$in_quote       = false;
+		$in_class       = false;
+		$class_first    = false;
+		$class_negation = false;
+		/** @var array<int, array{m:bool,x:bool}> $stack */
+		$stack = array(
+			array(
+				'm' => $initial_multiline,
+				'x' => $initial_extended,
+			),
+		);
 
 		for ( $i = 0; $i < $length; ++$i ) {
 			$char = $body[ $i ];
-			if ( $escaped ) {
-				$escaped = false;
+
+			if ( $in_quote ) {
+				if ( '\\' === $char && $i + 1 < $length && 'E' === $body[ $i + 1 ] ) {
+					$in_quote = false;
+					++$i;
+				}
 				continue;
 			}
-			if ( '\\' === $char ) {
-				$escaped = true;
-				continue;
-			}
+
 			if ( $in_class ) {
-				if ( ']' === $char ) {
+				if ( '\\' === $char ) {
+					if ( $i + 1 < $length && 'Q' === $body[ $i + 1 ] ) {
+						$in_quote       = true;
+						$class_first    = false;
+						$class_negation = false;
+						++$i;
+						continue;
+					}
+					$class_first    = false;
+					$class_negation = false;
+					++$i;
+					continue;
+				}
+				if ( $class_negation && '^' === $char ) {
+					$class_negation = false;
+					continue;
+				}
+				$was_first      = $class_first;
+				$class_first    = false;
+				$class_negation = false;
+				if ( '[' === $char && $i + 1 < $length && ( ':' === $body[ $i + 1 ] || '.' === $body[ $i + 1 ] || '=' === $body[ $i + 1 ] ) ) {
+					$marker = $body[ $i + 1 ];
+					$end    = strpos( $body, $marker . ']', $i + 2 );
+					if ( false !== $end ) {
+						$i = $end + 1;
+						continue;
+					}
+				}
+				if ( ']' === $char && ! $was_first ) {
 					$in_class = false;
 				}
 				continue;
 			}
-			if ( '[' === $char ) {
-				$in_class = true;
+
+			if ( '\\' === $char ) {
+				if ( $i + 1 < $length && 'Q' === $body[ $i + 1 ] ) {
+					$in_quote = true;
+				}
+				++$i;
 				continue;
 			}
-			if ( '$' === $char ) {
+
+			if ( '[' === $char ) {
+				$in_class       = true;
+				$class_first    = true;
+				$class_negation = true;
+				continue;
+			}
+
+			$top_index = count( $stack ) - 1;
+			$current   = $stack[ $top_index ];
+
+			if ( '#' === $char && $current['x'] ) {
+				$newline = strpos( $body, "\n", $i + 1 );
+				if ( false === $newline ) {
+					break;
+				}
+				$i = $newline;
+				continue;
+			}
+
+			if ( '(' === $char ) {
+				if ( $i + 2 < $length && '?' === $body[ $i + 1 ] && '#' === $body[ $i + 2 ] ) {
+					$comment_end = strpos( $body, ')', $i + 3 );
+					if ( false === $comment_end ) {
+						break;
+					}
+					$i = $comment_end;
+					continue;
+				}
+
+				$inline = $this->parse_inline_modifiers( $body, $i, $current );
+				if ( null !== $inline ) {
+					if ( $inline['scoped'] ) {
+						$stack[] = $inline['state'];
+					} else {
+						$stack[ $top_index ] = $inline['state'];
+					}
+					$i = $inline['end'];
+					continue;
+				}
+
+				$stack[] = $current;
+				continue;
+			}
+
+			if ( ')' === $char ) {
+				if ( count( $stack ) > 1 ) {
+					array_pop( $stack );
+				}
+				continue;
+			}
+
+			if ( '$' === $char && ! $current['m'] ) {
 				return true;
 			}
 		}
 
 		return false;
+	}
+
+	/**
+	 * Parse a PCRE inline modifier directive (?imsx-imsx) or scoped group (?imsx-imsx:...).
+	 *
+	 * @param string              $body    Pattern body.
+	 * @param int                 $pos     Index of opening "(".
+	 * @param array{m:bool,x:bool} $current Active option state.
+	 * @return array{scoped:bool,state:array{m:bool,x:bool},end:int}|null
+	 */
+	private function parse_inline_modifiers( string $body, int $pos, array $current ): ?array {
+		$length = strlen( $body );
+		if ( $pos + 2 >= $length || '?' !== $body[ $pos + 1 ] ) {
+			return null;
+		}
+
+		$cursor = $pos + 2;
+		$state  = $current;
+		$enable = true;
+		$seen   = false;
+
+		if ( '^' === $body[ $cursor ] ) {
+			$state['m'] = false;
+			$state['x'] = false;
+			++$cursor;
+			$seen = true;
+		}
+
+		while ( $cursor < $length ) {
+			$ch = $body[ $cursor ];
+			if ( '-' === $ch ) {
+				if ( ! $enable ) {
+					return null;
+				}
+				$enable = false;
+				++$cursor;
+				continue;
+			}
+			if ( false !== strpos( 'imsxUJnr', $ch ) ) {
+				$seen = true;
+				if ( 'm' === $ch ) {
+					$state['m'] = $enable;
+				} elseif ( 'x' === $ch ) {
+					$state['x'] = $enable;
+				}
+				++$cursor;
+				continue;
+			}
+			if ( ')' === $ch && $seen ) {
+				return array(
+					'scoped' => false,
+					'state'  => $state,
+					'end'    => $cursor,
+				);
+			}
+			if ( ':' === $ch && $seen ) {
+				return array(
+					'scoped' => true,
+					'state'  => $state,
+					'end'    => $cursor,
+				);
+			}
+			return null;
+		}
+
+		return null;
 	}
 }
