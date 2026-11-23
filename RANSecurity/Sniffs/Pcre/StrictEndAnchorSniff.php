@@ -205,6 +205,7 @@ final class StrictEndAnchorSniff implements Sniff {
 			}
 		}
 
+		$explicit_import = null;
 		for ( $i = $scope_start; $i < $stack_ptr; ++$i ) {
 			if ( T_USE !== $tokens[ $i ]['code'] ) {
 				continue;
@@ -228,10 +229,70 @@ final class StrictEndAnchorSniff implements Sniff {
 				if ( strtolower( $alias ) !== $name ) {
 					continue;
 				}
-				$normalized_target = strtolower( ltrim( $target, '\\' ) );
-				if ( $normalized_target !== $name ) {
-					return true;
+				$explicit_import = strtolower( ltrim( $target, '\\' ) );
+			}
+		}
+
+		if ( null !== $explicit_import ) {
+			return ! isset( self::TARGET_FUNCTIONS[ $explicit_import ] );
+		}
+
+		return $this->has_same_namespace_function_declaration( $phpcs_file, $active_ns_token, $scope_start, $name );
+	}
+
+	/**
+	 * Determine whether the active named namespace unconditionally declares a same-named function
+	 * in this file, shadowing PHP's global fallback for unqualified calls.
+	 *
+	 * @param File     $phpcs_file      The file being checked.
+	 * @param int|null $active_ns_token Enclosing braced T_NAMESPACE pointer, or null.
+	 * @param int      $scope_start     Start pointer of the active namespace scope.
+	 * @param string   $name            Lowercased function name.
+	 * @return bool
+	 */
+	private function has_same_namespace_function_declaration( File $phpcs_file, ?int $active_ns_token, int $scope_start, string $name ): bool {
+		$tokens = $phpcs_file->getTokens();
+		if ( null === $active_ns_token && ( ! isset( $tokens[ $scope_start ] ) || T_NAMESPACE !== $tokens[ $scope_start ]['code'] ) ) {
+			return false;
+		}
+
+		$scope_end = count( $tokens ) - 1;
+		if ( null !== $active_ns_token && isset( $tokens[ $active_ns_token ]['scope_closer'] ) ) {
+			$scope_end = (int) $tokens[ $active_ns_token ]['scope_closer'];
+		} else {
+			for ( $i = $scope_start + 1; $i <= $scope_end; ++$i ) {
+				if ( T_NAMESPACE !== $tokens[ $i ]['code'] ) {
+					continue;
 				}
+				$after_ns = $this->find_non_empty( $tokens, $i + 1, 1 );
+				if ( null !== $after_ns && T_NS_SEPARATOR === $tokens[ $after_ns ]['code'] ) {
+					continue;
+				}
+				$scope_end = $i - 1;
+				break;
+			}
+		}
+
+		$expected_conditions = null !== $active_ns_token
+			? array( $active_ns_token => T_NAMESPACE )
+			: array();
+
+		for ( $i = $scope_start; $i <= $scope_end; ++$i ) {
+			if ( T_FUNCTION !== $tokens[ $i ]['code'] ) {
+				continue;
+			}
+			$conditions = isset( $tokens[ $i ]['conditions'] ) && is_array( $tokens[ $i ]['conditions'] )
+				? $tokens[ $i ]['conditions']
+				: array();
+			if ( $conditions !== $expected_conditions ) {
+				continue;
+			}
+			$fn_name_ptr = $this->find_non_empty( $tokens, $i + 1, 1 );
+			if ( null !== $fn_name_ptr && 'T_BITWISE_AND' === $tokens[ $fn_name_ptr ]['type'] ) {
+				$fn_name_ptr = $this->find_non_empty( $tokens, $fn_name_ptr + 1, 1 );
+			}
+			if ( null !== $fn_name_ptr && T_STRING === $tokens[ $fn_name_ptr ]['code'] && strtolower( $tokens[ $fn_name_ptr ]['content'] ) === $name ) {
+				return true;
 			}
 		}
 
@@ -627,7 +688,7 @@ final class StrictEndAnchorSniff implements Sniff {
 						break;
 					}
 					$verb = substr( $body, $i + 2, $close - ( $i + 2 ) );
-					if ( 'CR' === $verb || 'LF' === $verb || 'CRLF' === $verb || 'ANYCRLF' === $verb || 'ANY' === $verb ) {
+					if ( 'CR' === $verb || 'LF' === $verb || 'CRLF' === $verb || 'ANYCRLF' === $verb || 'ANY' === $verb || 'NUL' === $verb ) {
 						$newline_mode = $verb;
 					} elseif ( 'UTF' === $verb ) {
 						$utf = true;
@@ -641,6 +702,14 @@ final class StrictEndAnchorSniff implements Sniff {
 						break;
 					}
 					$i = $comment_end;
+					continue;
+				}
+				if ( $i + 2 < $length && '?' === $body[ $i + 1 ] && 'C' === $body[ $i + 2 ] ) {
+					$callout_end = $this->find_callout_end( $body, $i + 3 );
+					if ( null === $callout_end ) {
+						break;
+					}
+					$i = $callout_end;
 					continue;
 				}
 
@@ -693,6 +762,10 @@ final class StrictEndAnchorSniff implements Sniff {
 			$pos = strpos( $body, "\r", $from );
 			return false === $pos ? null : $pos;
 		}
+		if ( 'NUL' === $newline_mode ) {
+			$pos = strpos( $body, "\0", $from );
+			return false === $pos ? null : $pos;
+		}
 		if ( 'CRLF' === $newline_mode ) {
 			$pos = strpos( $body, "\r\n", $from );
 			return false === $pos ? null : $pos + 1;
@@ -727,6 +800,54 @@ final class StrictEndAnchorSniff implements Sniff {
 		}
 
 		return null === $best ? null : $best['end'];
+	}
+
+	/**
+	 * Find the closing ")" of a PCRE2 callout (?C), (?C123), or string callout (?C'...'),
+	 * skipping doubled closing delimiters inside quoted callout text.
+	 *
+	 * @param string $body Pattern body.
+	 * @param int    $from Byte index immediately after "(?C".
+	 * @return int|null
+	 */
+	private function find_callout_end( string $body, int $from ): ?int {
+		$length = strlen( $body );
+		if ( $from >= $length ) {
+			return null;
+		}
+
+		$delimiters = array(
+			'`' => '`',
+			"'" => "'",
+			'"' => '"',
+			'^' => '^',
+			'%' => '%',
+			'#' => '#',
+			'$' => '$',
+			'{' => '}',
+		);
+
+		$first = $body[ $from ];
+		if ( isset( $delimiters[ $first ] ) ) {
+			$close = $delimiters[ $first ];
+			for ( $i = $from + 1; $i < $length; ++$i ) {
+				if ( $body[ $i ] !== $close ) {
+					continue;
+				}
+				if ( $i + 1 < $length && $body[ $i + 1 ] === $close ) {
+					++$i;
+					continue;
+				}
+				if ( $i + 1 < $length && ')' === $body[ $i + 1 ] ) {
+					return $i + 1;
+				}
+				return null;
+			}
+			return null;
+		}
+
+		$close = strpos( $body, ')', $from );
+		return false === $close ? null : $close;
 	}
 
 	/**
