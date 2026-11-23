@@ -597,6 +597,7 @@ preg_match( $dynamic_pattern, $value );
 $matcher->preg_match( '/^foo$/', $value );
 new preg_match( '/^foo$/', $value );
 new \preg_match( '/^foo$/', $value );
+new namespace\preg_match( '/^foo$/', $value );
 Tools\preg_match( '/^foo$/', $value );
 \Tools\preg_match( '/^foo$/', $value );
 #[\preg_match( '/^foo$/' )]

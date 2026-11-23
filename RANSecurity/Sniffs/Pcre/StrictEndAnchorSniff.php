@@ -74,6 +74,7 @@ final class StrictEndAnchorSniff implements Sniff {
 	 * @var array{
 	 *     file_key:string,
 	 *     has_target_alias:bool,
+	 *     namespaces:array<int, string>,
 	 *     imports:array<int, array<string, list<array{pos:int,target:string}>>>,
 	 *     shadowed:array<string, array<string, bool>>
 	 * }|null
@@ -107,6 +108,8 @@ final class StrictEndAnchorSniff implements Sniff {
 			return;
 		}
 
+		$index               = $this->get_file_index( $phpcs_file );
+		$scope               = $this->active_namespace_scope( $tokens, $stack_ptr, $index['namespaces'] );
 		$is_global_qualified = false;
 		$prev                = $this->find_non_empty( $tokens, $stack_ptr - 1, -1 );
 		if ( null !== $prev ) {
@@ -127,7 +130,11 @@ final class StrictEndAnchorSniff implements Sniff {
 						return;
 					}
 					if ( T_NAMESPACE === $before_code ) {
-						if ( '' !== Namespaces::determineNamespace( $phpcs_file, $stack_ptr ) ) {
+						$before_keyword = $this->find_non_empty( $tokens, $before_ns - 1, -1 );
+						if ( null !== $before_keyword && T_NEW === $tokens[ $before_keyword ]['code'] ) {
+							return;
+						}
+						if ( '' !== $scope['name'] ) {
 							return;
 						}
 					}
@@ -136,8 +143,7 @@ final class StrictEndAnchorSniff implements Sniff {
 			}
 		}
 
-		$name  = strtolower( $tokens[ $stack_ptr ]['content'] );
-		$index = $this->get_file_index( $phpcs_file );
+		$name = strtolower( $tokens[ $stack_ptr ]['content'] );
 		if ( $is_global_qualified ) {
 			if ( ! isset( self::TARGET_FUNCTIONS[ $name ] ) ) {
 				return;
@@ -146,18 +152,15 @@ final class StrictEndAnchorSniff implements Sniff {
 			if ( ! isset( self::TARGET_FUNCTIONS[ $name ] ) && ! $index['has_target_alias'] ) {
 				return;
 			}
-			$imported = $this->resolve_imported_function( $phpcs_file, $stack_ptr, $name, $index['imports'] );
+			$imported = $this->resolve_imported_function( $stack_ptr, $scope['key'], $name, $index['imports'] );
 			if ( null !== $imported ) {
 				if ( ! isset( self::TARGET_FUNCTIONS[ $imported ] ) ) {
 					return;
 				}
 			} elseif ( ! isset( self::TARGET_FUNCTIONS[ $name ] ) ) {
 				return;
-			} else {
-				$call_namespace = strtolower( Namespaces::determineNamespace( $phpcs_file, $stack_ptr ) );
-				if ( '' !== $call_namespace && isset( $index['shadowed'][ $call_namespace ][ $name ] ) ) {
-					return;
-				}
+			} elseif ( '' !== $scope['name'] && isset( $index['shadowed'][ $scope['name'] ][ $name ] ) ) {
+				return;
 			}
 		}
 
@@ -206,6 +209,7 @@ final class StrictEndAnchorSniff implements Sniff {
 	 * @return array{
 	 *     file_key:string,
 	 *     has_target_alias:bool,
+	 *     namespaces:array<int, string>,
 	 *     imports:array<int, array<string, list<array{pos:int,target:string}>>>,
 	 *     shadowed:array<string, array<string, bool>>
 	 * }
@@ -218,6 +222,8 @@ final class StrictEndAnchorSniff implements Sniff {
 		}
 
 		$has_target_alias = false;
+		/** @var array<int, string> $namespaces */
+		$namespaces = array( 0 => '' );
 		/** @var array<int, array<string, list<array{pos:int,target:string}>>> $imports */
 		$imports = array();
 		/** @var array<string, array<string, bool>> $shadowed */
@@ -240,10 +246,11 @@ final class StrictEndAnchorSniff implements Sniff {
 				if ( null !== $after_ns && T_NS_SEPARATOR === $tokens[ $after_ns ]['code'] ) {
 					continue;
 				}
-				$current_ns_key    = $i;
-				$declared_ns       = Namespaces::getDeclaredName( $phpcs_file, $i );
-				$current_ns_name   = is_string( $declared_ns ) ? strtolower( $declared_ns ) : '';
-				$current_ns_closer = isset( $tokens[ $i ]['scope_closer'] ) ? (int) $tokens[ $i ]['scope_closer'] : null;
+				$current_ns_key                = $i;
+				$declared_ns                   = Namespaces::getDeclaredName( $phpcs_file, $i );
+				$current_ns_name               = is_string( $declared_ns ) ? strtolower( $declared_ns ) : '';
+				$current_ns_closer             = isset( $tokens[ $i ]['scope_closer'] ) ? (int) $tokens[ $i ]['scope_closer'] : null;
+				$namespaces[ $current_ns_key ] = $current_ns_name;
 				if ( ! isset( $imports[ $current_ns_key ] ) ) {
 					$imports[ $current_ns_key ] = array();
 				}
@@ -303,6 +310,7 @@ final class StrictEndAnchorSniff implements Sniff {
 		$this->file_index = array(
 			'file_key'         => $file_key,
 			'has_target_alias' => $has_target_alias,
+			'namespaces'       => $namespaces,
 			'imports'          => $imports,
 			'shadowed'         => $shadowed,
 		);
@@ -311,41 +319,54 @@ final class StrictEndAnchorSniff implements Sniff {
 	}
 
 	/**
-	 * Resolve an unqualified call identifier against indexed `use function` imports in the
-	 * active namespace block, returning the lowercased normalized target name or null.
+	 * Determine the active namespace block key and lowercased name for $stack_ptr using the
+	 * cached per-file namespace map without rescanning tokens.
 	 *
-	 * @param File                                                                $phpcs_file The file being checked.
-	 * @param int                                                                 $stack_ptr  Call identifier token position.
-	 * @param string                                                              $name       Lowercased function name.
-	 * @param array<int, array<string, list<array{pos:int,target:string}>>>       $imports    Per-namespace-block import table.
-	 * @return string|null
+	 * @param array<int, array<string, mixed>> $tokens     File token stack.
+	 * @param int                              $stack_ptr  Token pointer.
+	 * @param array<int, string>               $namespaces Indexed namespace keys to lowercased names.
+	 * @return array{key:int,name:string}
 	 */
-	private function resolve_imported_function( File $phpcs_file, int $stack_ptr, string $name, array $imports ): ?string {
-		if ( array() === $imports ) {
-			return null;
-		}
-
-		$tokens      = $phpcs_file->getTokens();
-		$scope_key   = 0;
-		$found_brace = false;
-
+	private function active_namespace_scope( array $tokens, int $stack_ptr, array $namespaces ): array {
 		if ( isset( $tokens[ $stack_ptr ]['conditions'] ) && is_array( $tokens[ $stack_ptr ]['conditions'] ) ) {
 			foreach ( $tokens[ $stack_ptr ]['conditions'] as $cond_ptr => $cond_code ) {
 				if ( T_NAMESPACE === $cond_code ) {
-					$scope_key   = (int) $cond_ptr;
-					$found_brace = true;
+					$key = (int) $cond_ptr;
+					return array(
+						'key'  => $key,
+						'name' => $namespaces[ $key ] ?? '',
+					);
 				}
 			}
 		}
 
-		if ( ! $found_brace ) {
-			foreach ( array_keys( $imports ) as $ns_key ) {
-				if ( $ns_key <= $stack_ptr && $ns_key > $scope_key ) {
-					$scope_key = $ns_key;
+		$scope_key = 0;
+		foreach ( $namespaces as $ns_key => $ns_name ) {
+			if ( $ns_key <= $stack_ptr && $ns_key > $scope_key ) {
+				if ( isset( $tokens[ $ns_key ]['scope_closer'] ) && $stack_ptr > (int) $tokens[ $ns_key ]['scope_closer'] ) {
+					continue;
 				}
+				$scope_key = $ns_key;
 			}
 		}
 
+		return array(
+			'key'  => $scope_key,
+			'name' => $namespaces[ $scope_key ] ?? '',
+		);
+	}
+
+	/**
+	 * Resolve an unqualified call identifier against indexed `use function` imports in the
+	 * active namespace block, returning the lowercased normalized target name or null.
+	 *
+	 * @param int                                                           $stack_ptr Call identifier token position.
+	 * @param int                                                           $scope_key Active namespace block key.
+	 * @param string                                                        $name      Lowercased function name.
+	 * @param array<int, array<string, list<array{pos:int,target:string}>>> $imports   Per-namespace-block import table.
+	 * @return string|null
+	 */
+	private function resolve_imported_function( int $stack_ptr, int $scope_key, string $name, array $imports ): ?string {
 		if ( ! isset( $imports[ $scope_key ][ $name ] ) ) {
 			return null;
 		}
