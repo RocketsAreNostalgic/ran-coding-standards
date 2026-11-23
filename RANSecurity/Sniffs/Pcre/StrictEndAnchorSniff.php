@@ -654,13 +654,14 @@ final class StrictEndAnchorSniff implements Sniff {
 	 * @return bool
 	 */
 	private function has_active_single_line_dollar( string $body, bool $initial_multiline, bool $initial_extended, bool $initial_utf ): bool {
-		$length         = strlen( $body );
-		$in_quote       = false;
-		$in_class       = false;
-		$class_first    = false;
-		$class_negation = false;
-		$newline_mode   = 'LF';
-		$utf            = $initial_utf;
+		$length          = strlen( $body );
+		$in_quote        = false;
+		$in_class        = false;
+		$class_first     = false;
+		$class_negation  = false;
+		$ext_class_depth = 0;
+		$newline_mode    = 'LF';
+		$utf             = $initial_utf;
 		/** @var array<int, array{m:bool,x:bool,xx:bool}> $stack */
 		$stack = array(
 			array(
@@ -734,6 +735,47 @@ final class StrictEndAnchorSniff implements Sniff {
 				continue;
 			}
 
+			if ( $ext_class_depth > 0 ) {
+				if ( '\\' === $char ) {
+					if ( $i + 1 < $length && 'Q' === $body[ $i + 1 ] ) {
+						$in_quote = true;
+						++$i;
+						continue;
+					}
+					if ( $i + 2 < $length && 'c' === $body[ $i + 1 ] ) {
+						$i += 2;
+						continue;
+					}
+					++$i;
+					continue;
+				}
+				if ( '#' === $char ) {
+					$comment_end = $this->find_extended_comment_end( $body, $i + 1, $newline_mode, $utf );
+					if ( null === $comment_end ) {
+						break;
+					}
+					$i = $comment_end;
+					continue;
+				}
+				if ( '(' === $char && $i + 2 < $length && '?' === $body[ $i + 1 ] && '[' === $body[ $i + 2 ] ) {
+					++$ext_class_depth;
+					$i += 2;
+					continue;
+				}
+				if ( '[' === $char ) {
+					$in_class       = true;
+					$class_first    = true;
+					$class_negation = true;
+					continue;
+				}
+				if ( ']' === $char && $i + 1 < $length && ')' === $body[ $i + 1 ] ) {
+					--$ext_class_depth;
+					++$i;
+					continue;
+				}
+				continue;
+			}
+
 			if ( '\\' === $char ) {
 				if ( $i + 1 < $length && 'Q' === $body[ $i + 1 ] ) {
 					$in_quote = true;
@@ -765,6 +807,11 @@ final class StrictEndAnchorSniff implements Sniff {
 			}
 
 			if ( '(' === $char ) {
+				if ( $i + 2 < $length && '?' === $body[ $i + 1 ] && '[' === $body[ $i + 2 ] ) {
+					++$ext_class_depth;
+					$i += 2;
+					continue;
+				}
 				if ( $i + 1 < $length && '*' === $body[ $i + 1 ] ) {
 					$colon = strpos( $body, ':', $i + 2 );
 					$close = strpos( $body, ')', $i + 2 );
