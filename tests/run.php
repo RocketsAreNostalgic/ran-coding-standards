@@ -588,6 +588,8 @@ preg_match( '/\c$/', $price );
 preg_match( '/(*MARK:price$)value/', $price );
 preg_match( '/(?#$)/', $price );
 preg_match( "/^prefix # comment $\n/x", $value );
+preg_match( "/(*CR)^prefix # comment\n$/x", $value );
+preg_match( "/(*CRLF)^prefix # comment\n$/x", $value );
 preg_match( '/^prefix/', $value );
 preg_match( $dynamic_pattern, $value );
 $matcher->preg_match( '/^foo$/', $value );
@@ -596,7 +598,13 @@ new \preg_match( '/^foo$/', $value );
 Tools\preg_match( '/^foo$/', $value );
 \Tools\preg_match( '/^foo$/', $value );
 namespace\preg_match( '/^foo$/', $value );
+#[\preg_match( '/^foo$/' )]
+#[preg_match( '/^foo$/' )]
 class Wrapper { public function preg_match( $p, $s ) {} }
+namespace AliasedScope {
+	use function Demo\other as preg_match;
+	preg_match( '/^aliased$/', $value );
+}
 PHP;
 list($security_status, $security_messages) = $security_pcre_run( $security_pcre_valid );
 if ( 0 !== $security_status || array() !== $security_messages ) {
@@ -606,36 +614,44 @@ if ( 0 !== $security_status || array() !== $security_messages ) {
 }
 $security_pcre_invalid                     = <<<'PHP'
 <?php
-preg_match( '/^[0-9a-f]{40}$/i', $sha );
-\preg_match( '#^[A-Za-z0-9_.-]{1,100}$#', $repo );
-preg_match_all( '~^item$~', $list );
-preg_match( "/^foo\$/", $value );
-preg_match( "/^foo\\\\$/", $value );
-preg_match( "/^foo\x24/", $value );
-preg_match( "/^foo\X24/", $value );
-preg_match( b'/^binary$/', $value );
-preg_match( '/\A(?:a|b$)/', $value );
-preg_match( '/\Q[\Evalue$/', $value );
-preg_match( '/\c$value$/', $value );
-preg_match( '/(*MARK:price$)value$/', $value );
-preg_match( '/[]$]+value$/', $value );
-preg_match( '/[^]$]+value$/', $value );
-preg_match( '/[[:digit:]$]+value$/', $value );
-preg_match( '/(?#$)value$/', $value );
-preg_match( "/^value # comment\n$/x", $value );
-preg_match( "/(*CR)^value # comment\r$/x", $value );
-preg_match(
-	'/^value # multiline comment
+namespace InvalidScope {
+	use function Demo\other as preg_match;
+	\preg_match( '/^global-despite-alias$/', $value );
+}
+namespace GlobalCases {
+	preg_match( '/^[0-9a-f]{40}$/i', $sha );
+	\preg_match( '#^[A-Za-z0-9_.-]{1,100}$#', $repo );
+	preg_match_all( '~^item$~', $list );
+	preg_match( "/^foo\$/", $value );
+	preg_match( "/^foo\\\\$/", $value );
+	preg_match( "/^foo\x24/", $value );
+	preg_match( "/^foo\X24/", $value );
+	preg_match( b'/^binary$/', $value );
+	preg_match( '/\A(?:a|b$)/', $value );
+	preg_match( '/(*atomic:value$)/', $value );
+	preg_match( '/\Q[\Evalue$/', $value );
+	preg_match( '/\c$value$/', $value );
+	preg_match( '/(*MARK:price$)value$/', $value );
+	preg_match( '/[]$]+value$/', $value );
+	preg_match( '/[^]$]+value$/', $value );
+	preg_match( '/[[:digit:]$]+value$/', $value );
+	preg_match( '/(?#$)value$/', $value );
+	preg_match( "/^value # comment\n$/x", $value );
+	preg_match( "/(*CR)^value # comment\r$/x", $value );
+	preg_match( "/(*ANY)^value # comment\x0B$/x", $value );
+	preg_match(
+		'/^value # multiline comment
 $/x',
-	$value
-);
-preg_match( '/(?-m:^value$)/m', $value );
-preg_match( '/(?-m)^value$/m', $value );
-preg_match( '/(?m:^a$)|b$/', $value );
-preg_match( subject: $value, pattern: '/^named$/' );
+		$value
+	);
+	preg_match( '/(?-m:^value$)/m', $value );
+	preg_match( '/(?-m)^value$/m', $value );
+	preg_match( '/(?m:^a$)|b$/', $value );
+	preg_match( subject: $value, pattern: '/^named$/' );
+}
 PHP;
 list($security_status, $security_messages) = $security_pcre_run( $security_pcre_invalid );
-if ( 1 !== $security_status || 23 !== count( $security_messages ) ) {
+if ( 1 !== $security_status || 26 !== count( $security_messages ) ) {
 	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime. Encode machine-readable fixture data or CLI diagnostics without WordPress helpers.
 	fwrite( STDERR, 'Unanchored PCRE end-dollar patterns were missed by RANSecurity: ' . json_encode( $security_messages ) . "\n" );
 	exit( 1 );

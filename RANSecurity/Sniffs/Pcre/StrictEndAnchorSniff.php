@@ -10,8 +10,10 @@ namespace RANSecurity\Sniffs\Pcre;
 use PHP_CodeSniffer\Files\File;
 use PHP_CodeSniffer\Sniffs\Sniff;
 use PHPCSUtils\Tokens\Collections;
+use PHPCSUtils\Utils\Context;
 use PHPCSUtils\Utils\PassedParameters;
 use PHPCSUtils\Utils\TextStrings;
+use PHPCSUtils\Utils\UseStatements;
 
 /**
  * Reject unescaped "$" anchors in single-line PCRE validation patterns lacking the "D" modifier.
@@ -41,6 +43,31 @@ final class StrictEndAnchorSniff implements Sniff {
 	);
 
 	/**
+	 * PCRE2 pattern-bearing (*keyword:...) group names whose bodies must be scanned.
+	 *
+	 * @var array<string, bool>
+	 */
+	private const PATTERN_STAR_GROUPS = array(
+		'atomic'                         => true,
+		'positive_lookahead'             => true,
+		'pla'                            => true,
+		'negative_lookahead'             => true,
+		'nla'                            => true,
+		'positive_lookbehind'            => true,
+		'plb'                            => true,
+		'negative_lookbehind'            => true,
+		'nlb'                            => true,
+		'non_atomic_positive_lookahead'  => true,
+		'napla'                          => true,
+		'non_atomic_positive_lookbehind' => true,
+		'naplb'                          => true,
+		'script_run'                     => true,
+		'sr'                             => true,
+		'atomic_script_run'              => true,
+		'asr'                            => true,
+	);
+
+	/**
 	 * Register function-call identifier tokens.
 	 *
 	 * @return array<int>
@@ -63,7 +90,12 @@ final class StrictEndAnchorSniff implements Sniff {
 			return;
 		}
 
-		$prev = $this->find_non_empty( $tokens, $stack_ptr - 1, -1 );
+		if ( Context::inAttribute( $phpcs_file, $stack_ptr ) ) {
+			return;
+		}
+
+		$is_global_qualified = false;
+		$prev                = $this->find_non_empty( $tokens, $stack_ptr - 1, -1 );
 		if ( null !== $prev ) {
 			$prev_code = $tokens[ $prev ]['code'];
 			if (
@@ -86,7 +118,12 @@ final class StrictEndAnchorSniff implements Sniff {
 				) {
 					return;
 				}
+				$is_global_qualified = true;
 			}
+		}
+
+		if ( ! $is_global_qualified && $this->is_aliased_to_non_global_function( $phpcs_file, $stack_ptr, $name ) ) {
+			return;
 		}
 
 		$next = $this->find_non_empty( $tokens, $stack_ptr + 1, 1 );
@@ -119,7 +156,8 @@ final class StrictEndAnchorSniff implements Sniff {
 
 		$initial_multiline = false !== strpos( $modifiers, 'm' );
 		$initial_extended  = false !== strpos( $modifiers, 'x' );
-		if ( ! $this->has_active_single_line_dollar( $body, $initial_multiline, $initial_extended ) ) {
+		$initial_utf       = false !== strpos( $modifiers, 'u' );
+		if ( ! $this->has_active_single_line_dollar( $body, $initial_multiline, $initial_extended, $initial_utf ) ) {
 			return;
 		}
 
@@ -128,6 +166,76 @@ final class StrictEndAnchorSniff implements Sniff {
 			$pattern_ptr,
 			'UnanchoredEndDollar'
 		);
+	}
+
+	/**
+	 * Determine whether an unqualified function name is imported via `use function` to a
+	 * non-global target (or a different global function) in the active namespace scope.
+	 *
+	 * @param File   $phpcs_file The file being checked.
+	 * @param int    $stack_ptr  Call identifier token position.
+	 * @param string $name       Lowercased function name.
+	 * @return bool
+	 */
+	private function is_aliased_to_non_global_function( File $phpcs_file, int $stack_ptr, string $name ): bool {
+		$tokens          = $phpcs_file->getTokens();
+		$active_ns_token = null;
+		$scope_start     = 0;
+
+		if ( isset( $tokens[ $stack_ptr ]['conditions'] ) && is_array( $tokens[ $stack_ptr ]['conditions'] ) ) {
+			foreach ( $tokens[ $stack_ptr ]['conditions'] as $cond_ptr => $cond_code ) {
+				if ( T_NAMESPACE === $cond_code ) {
+					$active_ns_token = (int) $cond_ptr;
+					$scope_start     = (int) $cond_ptr;
+				}
+			}
+		}
+
+		if ( null === $active_ns_token ) {
+			for ( $i = $stack_ptr - 1; $i >= 0; --$i ) {
+				if ( T_NAMESPACE !== $tokens[ $i ]['code'] ) {
+					continue;
+				}
+				$after_ns = $this->find_non_empty( $tokens, $i + 1, 1 );
+				if ( null !== $after_ns && T_NS_SEPARATOR === $tokens[ $after_ns ]['code'] ) {
+					continue;
+				}
+				$scope_start = $i;
+				break;
+			}
+		}
+
+		for ( $i = $scope_start; $i < $stack_ptr; ++$i ) {
+			if ( T_USE !== $tokens[ $i ]['code'] ) {
+				continue;
+			}
+			if ( ! UseStatements::isImportUse( $phpcs_file, $i ) ) {
+				continue;
+			}
+			if ( null !== $active_ns_token ) {
+				$use_conditions = isset( $tokens[ $i ]['conditions'] ) && is_array( $tokens[ $i ]['conditions'] )
+					? $tokens[ $i ]['conditions']
+					: array();
+				if ( ! isset( $use_conditions[ $active_ns_token ] ) ) {
+					continue;
+				}
+			} elseif ( isset( $tokens[ $i ]['conditions'] ) && is_array( $tokens[ $i ]['conditions'] ) && array() !== $tokens[ $i ]['conditions'] ) {
+				continue;
+			}
+
+			$split = UseStatements::splitImportUseStatement( $phpcs_file, $i );
+			foreach ( $split['function'] as $alias => $target ) {
+				if ( strtolower( $alias ) !== $name ) {
+					continue;
+				}
+				$normalized_target = strtolower( ltrim( $target, '\\' ) );
+				if ( $normalized_target !== $name ) {
+					return true;
+				}
+			}
+		}
+
+		return false;
 	}
 
 	/**
@@ -393,20 +501,23 @@ final class StrictEndAnchorSniff implements Sniff {
 
 	/**
 	 * Detect an active non-multiline "$" anchor while respecting escapes, \Q...\E,
-	 * character classes (including leading "]" and POSIX classes), comments, and inline modifiers.
+	 * character classes (including leading "]" and POSIX classes), comments, newline verbs,
+	 * pattern-bearing (*keyword:...) groups, and inline modifiers.
 	 *
 	 * @param string $body              PCRE pattern body without delimiters.
 	 * @param bool   $initial_multiline Whether trailing /m is active initially.
 	 * @param bool   $initial_extended  Whether trailing /x is active initially.
+	 * @param bool   $initial_utf       Whether trailing /u is active initially.
 	 * @return bool
 	 */
-	private function has_active_single_line_dollar( string $body, bool $initial_multiline, bool $initial_extended ): bool {
-		$length          = strlen( $body );
-		$in_quote        = false;
-		$in_class        = false;
-		$class_first     = false;
-		$class_negation  = false;
-		$cr_ends_comment = false;
+	private function has_active_single_line_dollar( string $body, bool $initial_multiline, bool $initial_extended, bool $initial_utf ): bool {
+		$length         = strlen( $body );
+		$in_quote       = false;
+		$in_class       = false;
+		$class_first    = false;
+		$class_negation = false;
+		$newline_mode   = 'LF';
+		$utf            = $initial_utf;
 		/** @var array<int, array{m:bool,x:bool}> $stack */
 		$stack = array(
 			array(
@@ -492,32 +603,36 @@ final class StrictEndAnchorSniff implements Sniff {
 			$current   = $stack[ $top_index ];
 
 			if ( '#' === $char && $current['x'] ) {
-				$lf = strpos( $body, "\n", $i + 1 );
-				$cr = $cr_ends_comment ? strpos( $body, "\r", $i + 1 ) : false;
-				if ( false === $lf && false === $cr ) {
+				$comment_end = $this->find_extended_comment_end( $body, $i + 1, $newline_mode, $utf );
+				if ( null === $comment_end ) {
 					break;
 				}
-				if ( false !== $lf && false !== $cr ) {
-					$i = min( $lf, $cr );
-				} else {
-					$i = false !== $lf ? $lf : (int) $cr;
-				}
+				$i = $comment_end;
 				continue;
 			}
 
 			if ( '(' === $char ) {
 				if ( $i + 1 < $length && '*' === $body[ $i + 1 ] ) {
-					$verb_end = strpos( $body, ')', $i + 2 );
-					if ( false === $verb_end ) {
+					$colon = strpos( $body, ':', $i + 2 );
+					$close = strpos( $body, ')', $i + 2 );
+					if ( false !== $colon && ( false === $close || $colon < $close ) ) {
+						$keyword = substr( $body, $i + 2, $colon - ( $i + 2 ) );
+						if ( isset( self::PATTERN_STAR_GROUPS[ $keyword ] ) ) {
+							$stack[] = $current;
+							$i       = $colon;
+							continue;
+						}
+					}
+					if ( false === $close ) {
 						break;
 					}
-					$verb = substr( $body, $i + 2, $verb_end - ( $i + 2 ) );
-					if ( 'CR' === $verb || 'ANYCRLF' === $verb || 'ANY' === $verb ) {
-						$cr_ends_comment = true;
-					} elseif ( 'LF' === $verb || 'CRLF' === $verb ) {
-						$cr_ends_comment = false;
+					$verb = substr( $body, $i + 2, $close - ( $i + 2 ) );
+					if ( 'CR' === $verb || 'LF' === $verb || 'CRLF' === $verb || 'ANYCRLF' === $verb || 'ANY' === $verb ) {
+						$newline_mode = $verb;
+					} elseif ( 'UTF' === $verb ) {
+						$utf = true;
 					}
-					$i = $verb_end;
+					$i = $close;
 					continue;
 				}
 				if ( $i + 2 < $length && '?' === $body[ $i + 1 ] && '#' === $body[ $i + 2 ] ) {
@@ -557,6 +672,61 @@ final class StrictEndAnchorSniff implements Sniff {
 		}
 
 		return false;
+	}
+
+	/**
+	 * Find the byte index of the end of an extended-mode (/x) "#" comment under the active
+	 * PCRE2 newline convention, returning null if the comment runs to the end of the pattern.
+	 *
+	 * @param string $body         Pattern body.
+	 * @param int    $from         First byte after "#".
+	 * @param string $newline_mode Active PCRE2 newline convention (LF, CR, CRLF, ANYCRLF, ANY).
+	 * @param bool   $utf          Whether UTF mode (/u or (*UTF)) is active.
+	 * @return int|null
+	 */
+	private function find_extended_comment_end( string $body, int $from, string $newline_mode, bool $utf ): ?int {
+		if ( 'LF' === $newline_mode ) {
+			$pos = strpos( $body, "\n", $from );
+			return false === $pos ? null : $pos;
+		}
+		if ( 'CR' === $newline_mode ) {
+			$pos = strpos( $body, "\r", $from );
+			return false === $pos ? null : $pos;
+		}
+		if ( 'CRLF' === $newline_mode ) {
+			$pos = strpos( $body, "\r\n", $from );
+			return false === $pos ? null : $pos + 1;
+		}
+
+		$candidates = array( "\n", "\r" );
+		if ( 'ANY' === $newline_mode ) {
+			$candidates[] = "\x0B";
+			$candidates[] = "\x0C";
+			if ( $utf ) {
+				$candidates[] = "\xC2\x85";
+				$candidates[] = "\xE2\x80\xA8";
+				$candidates[] = "\xE2\x80\xA9";
+			} else {
+				$candidates[] = "\x85";
+			}
+		}
+
+		$best = null;
+		foreach ( $candidates as $seq ) {
+			$pos = strpos( $body, $seq, $from );
+			if ( false === $pos ) {
+				continue;
+			}
+			$end = $pos + strlen( $seq ) - 1;
+			if ( null === $best || $pos < $best['pos'] ) {
+				$best = array(
+					'pos' => $pos,
+					'end' => $end,
+				);
+			}
+		}
+
+		return null === $best ? null : $best['end'];
 	}
 
 	/**
