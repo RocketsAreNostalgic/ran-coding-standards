@@ -444,8 +444,7 @@ final class StrictEndAnchorSniff implements Sniff {
 				$tokens[ $closer ]['content']
 			);
 			if ( 'T_START_HEREDOC' === $token_type ) {
-				$stripped = TextStrings::getStripEmbeds( $body );
-				if ( array() !== $stripped['embeds'] ) {
+				if ( $this->has_heredoc_interpolation( $body ) ) {
 					return null;
 				}
 				$body = $this->decode_double_quoted_body( $body, false );
@@ -529,6 +528,39 @@ final class StrictEndAnchorSniff implements Sniff {
 		unset( $line );
 
 		return implode( "\n", $lines );
+	}
+
+	/**
+	 * Detect whether a heredoc body contains any PHP variable interpolation in a bounded single pass.
+	 *
+	 * @param string $body Raw heredoc body.
+	 * @return bool
+	 */
+	private function has_heredoc_interpolation( string $body ): bool {
+		$length = strlen( $body );
+		for ( $i = 0; $i < $length; ++$i ) {
+			if ( '\\' === $body[ $i ] ) {
+				++$i;
+				continue;
+			}
+			if ( '{' === $body[ $i ] && $i + 1 < $length && '$' === $body[ $i + 1 ] ) {
+				return true;
+			}
+			if ( '$' === $body[ $i ] && $i + 1 < $length ) {
+				$next = $body[ $i + 1 ];
+				if (
+					'{' === $next
+					|| '_' === $next
+					|| ( $next >= 'a' && $next <= 'z' )
+					|| ( $next >= 'A' && $next <= 'Z' )
+					|| ord( $next ) >= 0x80
+				) {
+					return true;
+				}
+			}
+		}
+
+		return false;
 	}
 
 	/**

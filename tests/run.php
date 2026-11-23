@@ -587,6 +587,12 @@ preg_match(
 	PAT,
 	$sha
 );
+preg_match(
+	<<<PAT
+	/^{$a['{']}$/
+	PAT,
+	$sha
+);
 preg_match( '/^[ \t]*Plugin Name:.*$/m', $doc );
 preg_match( '/(?m)^value$/', $doc );
 preg_match( '/(?am)^value$/', $doc );
