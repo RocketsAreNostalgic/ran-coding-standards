@@ -11,6 +11,7 @@ The package implements the PHP portion of the RAN organisation quality policy. I
 - `RANWordPressPlugin` — WordPress plugin profile.
 - `RANWordPressLibrary` — WordPress library profile.
 - `RANOwnedMethods` — opt-in additional method-name enforcement for selected first-party code, including inherited classes. Use alongside a WordPress profile, not instead of one.
+- `RANSecurity` — opt-in security-hardening checks (such as strict PCRE end-of-subject anchoring) for maintained first-party PHP. Use alongside a WordPress profile, not instead of one.
 
 The plugin and library profiles intentionally begin as thin named profiles over `RANWordPress`. Separate names allow future divergence to be explicit and versioned rather than inferred from consumer exceptions.
 
@@ -176,6 +177,17 @@ Prepare candidate tooling independently; consumer activation and lock updates
 follow each release lane's recorded handoff. This opt-in delivery is migration
 staging, not an approved permanent naming exemption. The package's exact
 RAN Starter/RAN Booster proof and release-authorization requirements still apply.
+
+## Opt-in security checks (`RANSecurity`)
+
+`RANSecurity` provides opt-in security-hardening sniffs that consumers can enable alongside a WordPress profile:
+
+```xml
+<rule ref="RANWordPressLibrary"/>
+<rule ref="RANSecurity"/>
+```
+
+- `RANSecurity.Pcre.StrictEndAnchor` — flags literal `preg_match()` / `preg_match_all()` patterns that use an unescaped `$` anchor without the `D` (`PCRE_DOLLAR_ENDONLY`) or `m` (multiline) modifier, preventing silent acceptance of trailing newlines in single-line validators. Prefer `\A...\z` with `/D`.
 
 ## Version policy
 

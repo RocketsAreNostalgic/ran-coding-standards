@@ -147,5 +147,33 @@ if ( 1 !== $command_status || 1 !== count( $owned_messages )
 	exit( 1 );
 }
 
+$pcre_fixture = $tmp . '/security-pcre.php';
+// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Write exact disposable fixture or configuration bytes in this CLI-only test.
+if ( false === file_put_contents( $pcre_fixture, "<?php preg_match( '/^[0-9a-f]{40}$/i', \$sha );\n" ) ) {
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime.
+	fwrite( STDERR, "Could not write the installed RANSecurity fixture.\n" );
+	exit( 1 );
+}
+$output = array();
+// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- Run the selected local checker or isolated Composer consumer proof as a CLI subprocess.
+exec(
+	escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( $tmp . '/vendor/bin/phpcs' )
+	. ' -n --standard=RANSecurity --report=json ' . escapeshellarg( $pcre_fixture ) . ' 2>&1',
+	$output,
+	$command_status
+);
+$pcre_report   = json_decode( implode( "\n", $output ), true );
+$pcre_messages = array();
+foreach ( $pcre_report['files'] ?? array() as $pcre_file ) {
+	$pcre_messages = array_merge( $pcre_messages, $pcre_file['messages'] );
+}
+if ( 1 !== $command_status || 1 !== count( $pcre_messages )
+	|| 'RANSecurity.Pcre.StrictEndAnchor.UnanchoredEndDollar' !== $pcre_messages[0]['source']
+) {
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime.
+	fwrite( STDERR, "Installed RANSecurity enforcement failed:\n" . implode( "\n", $output ) . "\n" );
+	exit( 1 );
+}
+
 // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime.
 fwrite( STDOUT, "A stable consumer root installs and runs the opt-in owned-method check without development-only alpha dependencies.\n" );

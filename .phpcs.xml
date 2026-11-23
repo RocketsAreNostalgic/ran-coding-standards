@@ -12,6 +12,7 @@
         <properties>
             <property name="prefixes" type="array">
                 <element value="RANOwnedMethods"/>
+                <element value="RANSecurity"/>
                 <element value="ran_coding_standards"/>
             </property>
         </properties>
