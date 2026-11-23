@@ -576,11 +576,15 @@ preg_match( '/\A[0-9a-f]{40}\z/iD', $sha );
 preg_match( '/^[0-9a-f]{40}$/iD', $sha );
 preg_match( '/^[ \t]*Plugin Name:.*$/m', $doc );
 preg_match( '/(?m)^value$/', $doc );
+preg_match( '/(?am)^value$/', $doc );
+preg_match( '/(?aPm)^value$/', $doc );
 preg_match( '/(?m:^value$)/', $doc );
 preg_match( '/\$100/', $price );
 preg_match( "/\\$/", $price );
 preg_match( '/[a-z$]/', $char );
 preg_match( '/[]$]/', $char );
+preg_match( '/(?xx)[ ]$]/', $char );
+preg_match( '/[\Q\E]$]/', $char );
 preg_match( '/[^]$]/', $char );
 preg_match( '/[[:digit:]$]/', $char );
 preg_match( '/\Q$\E/', $price );
@@ -684,6 +688,8 @@ namespace GlobalCases {
 	preg_match( '/\A(?:a|b$)/', $value );
 	preg_match( '/(*atomic:value$)/', $value );
 	preg_match( '/\Q[\Evalue$/', $value );
+	preg_match( '/[\Qa\E]value$/', $value );
+	preg_match( '/(?aD)^value$/', $value );
 	preg_match( '/\c$value$/', $value );
 	preg_match( '/(*MARK:price$)value$/', $value );
 	preg_match( "/(?C'price$')value$/", $value );
@@ -707,7 +713,7 @@ $/x',
 }
 PHP;
 list($security_status, $security_messages) = $security_pcre_run( $security_pcre_invalid );
-if ( 1 !== $security_status || 32 !== count( $security_messages ) ) {
+if ( 1 !== $security_status || 34 !== count( $security_messages ) ) {
 	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime. Encode machine-readable fixture data or CLI diagnostics without WordPress helpers.
 	fwrite( STDERR, 'Unanchored PCRE end-dollar patterns were missed by RANSecurity: ' . json_encode( $security_messages ) . "\n" );
 	exit( 1 );

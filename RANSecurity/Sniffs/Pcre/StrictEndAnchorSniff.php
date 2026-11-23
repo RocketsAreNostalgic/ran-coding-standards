@@ -187,10 +187,12 @@ final class StrictEndAnchorSniff implements Sniff {
 			return;
 		}
 
-		$initial_multiline = false !== strpos( $modifiers, 'm' );
-		$initial_extended  = false !== strpos( $modifiers, 'x' );
-		$initial_utf       = false !== strpos( $modifiers, 'u' );
-		if ( ! $this->has_active_single_line_dollar( $body, $initial_multiline, $initial_extended, $initial_utf ) ) {
+		$initial_multiline     = false !== strpos( $modifiers, 'm' );
+		$x_modifier_count      = substr_count( $modifiers, 'x' );
+		$initial_extended      = $x_modifier_count >= 1;
+		$initial_extended_more = $x_modifier_count >= 2;
+		$initial_utf           = false !== strpos( $modifiers, 'u' );
+		if ( ! $this->has_active_single_line_dollar( $body, $initial_multiline, $initial_extended, $initial_extended_more, $initial_utf ) ) {
 			return;
 		}
 
@@ -647,13 +649,14 @@ final class StrictEndAnchorSniff implements Sniff {
 	 * character classes (including leading "]" and POSIX classes), comments, newline verbs,
 	 * pattern-bearing (*keyword:...) groups, and inline modifiers.
 	 *
-	 * @param string $body              PCRE pattern body without delimiters.
-	 * @param bool   $initial_multiline Whether trailing /m is active initially.
-	 * @param bool   $initial_extended  Whether trailing /x is active initially.
-	 * @param bool   $initial_utf       Whether trailing /u is active initially.
+	 * @param string $body                  PCRE pattern body without delimiters.
+	 * @param bool   $initial_multiline     Whether trailing /m is active initially.
+	 * @param bool   $initial_extended      Whether trailing /x is active initially.
+	 * @param bool   $initial_extended_more Whether trailing /xx is active initially.
+	 * @param bool   $initial_utf           Whether trailing /u is active initially.
 	 * @return bool
 	 */
-	private function has_active_single_line_dollar( string $body, bool $initial_multiline, bool $initial_extended, bool $initial_utf ): bool {
+	private function has_active_single_line_dollar( string $body, bool $initial_multiline, bool $initial_extended, bool $initial_extended_more, bool $initial_utf ): bool {
 		$length         = strlen( $body );
 		$in_quote       = false;
 		$in_class       = false;
@@ -661,21 +664,29 @@ final class StrictEndAnchorSniff implements Sniff {
 		$class_negation = false;
 		$newline_mode   = 'LF';
 		$utf            = $initial_utf;
-		/** @var array<int, array{m:bool,x:bool}> $stack */
+		/** @var array<int, array{m:bool,x:bool,xx:bool}> $stack */
 		$stack = array(
 			array(
-				'm' => $initial_multiline,
-				'x' => $initial_extended,
+				'm'  => $initial_multiline,
+				'x'  => $initial_extended,
+				'xx' => $initial_extended_more,
 			),
 		);
 
 		for ( $i = 0; $i < $length; ++$i ) {
-			$char = $body[ $i ];
+			$char      = $body[ $i ];
+			$top_index = count( $stack ) - 1;
+			$current   = $stack[ $top_index ];
 
 			if ( $in_quote ) {
 				if ( '\\' === $char && $i + 1 < $length && 'E' === $body[ $i + 1 ] ) {
 					$in_quote = false;
 					++$i;
+					continue;
+				}
+				if ( $in_class ) {
+					$class_first    = false;
+					$class_negation = false;
 				}
 				continue;
 			}
@@ -683,9 +694,7 @@ final class StrictEndAnchorSniff implements Sniff {
 			if ( $in_class ) {
 				if ( '\\' === $char ) {
 					if ( $i + 1 < $length && 'Q' === $body[ $i + 1 ] ) {
-						$in_quote       = true;
-						$class_first    = false;
-						$class_negation = false;
+						$in_quote = true;
 						++$i;
 						continue;
 					}
@@ -698,6 +707,9 @@ final class StrictEndAnchorSniff implements Sniff {
 					$class_first    = false;
 					$class_negation = false;
 					++$i;
+					continue;
+				}
+				if ( $current['xx'] && ( ' ' === $char || "\t" === $char ) ) {
 					continue;
 				}
 				if ( $class_negation && '^' === $char ) {
@@ -741,9 +753,6 @@ final class StrictEndAnchorSniff implements Sniff {
 				$class_negation = true;
 				continue;
 			}
-
-			$top_index = count( $stack ) - 1;
-			$current   = $stack[ $top_index ];
 
 			if ( '#' === $char && $current['x'] ) {
 				$comment_end = $this->find_extended_comment_end( $body, $i + 1, $newline_mode, $utf );
@@ -935,10 +944,10 @@ final class StrictEndAnchorSniff implements Sniff {
 	/**
 	 * Parse a PCRE inline modifier directive (?imsx-imsx) or scoped group (?imsx-imsx:...).
 	 *
-	 * @param string              $body    Pattern body.
-	 * @param int                 $pos     Index of opening "(".
-	 * @param array{m:bool,x:bool} $current Active option state.
-	 * @return array{scoped:bool,state:array{m:bool,x:bool},end:int}|null
+	 * @param string                       $body    Pattern body.
+	 * @param int                          $pos     Index of opening "(".
+	 * @param array{m:bool,x:bool,xx:bool} $current Active option state.
+	 * @return array{scoped:bool,state:array{m:bool,x:bool,xx:bool},end:int}|null
 	 */
 	private function parse_inline_modifiers( string $body, int $pos, array $current ): ?array {
 		$length = strlen( $body );
@@ -946,14 +955,16 @@ final class StrictEndAnchorSniff implements Sniff {
 			return null;
 		}
 
-		$cursor = $pos + 2;
-		$state  = $current;
-		$enable = true;
-		$seen   = false;
+		$cursor  = $pos + 2;
+		$state   = $current;
+		$enable  = true;
+		$seen    = false;
+		$x_count = 0;
 
 		if ( '^' === $body[ $cursor ] ) {
-			$state['m'] = false;
-			$state['x'] = false;
+			$state['m']  = false;
+			$state['x']  = false;
+			$state['xx'] = false;
 			++$cursor;
 			$seen = true;
 		}
@@ -968,12 +979,28 @@ final class StrictEndAnchorSniff implements Sniff {
 				++$cursor;
 				continue;
 			}
+			if ( 'a' === $ch ) {
+				$seen = true;
+				++$cursor;
+				if ( $cursor < $length && false !== strpos( 'DPSTW', $body[ $cursor ] ) ) {
+					++$cursor;
+				}
+				continue;
+			}
 			if ( false !== strpos( 'imsxUJnr', $ch ) ) {
 				$seen = true;
 				if ( 'm' === $ch ) {
 					$state['m'] = $enable;
 				} elseif ( 'x' === $ch ) {
-					$state['x'] = $enable;
+					if ( $enable ) {
+						++$x_count;
+						$state['x']  = true;
+						$state['xx'] = $x_count >= 2;
+					} else {
+						$x_count     = 0;
+						$state['x']  = false;
+						$state['xx'] = false;
+					}
 				}
 				++$cursor;
 				continue;
