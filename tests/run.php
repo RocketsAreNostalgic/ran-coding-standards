@@ -574,6 +574,19 @@ $security_pcre_valid_global                = <<<'PHP'
 <?php
 preg_match( '/\A[0-9a-f]{40}\z/iD', $sha );
 preg_match( '/^[0-9a-f]{40}$/iD', $sha );
+preg_match( ( '/^parenthesized$/D' ), $sha );
+preg_match(
+	<<<'PAT'
+	/^nowdoc$/D
+	PAT,
+	$sha
+);
+preg_match(
+	<<<PAT
+	/^heredoc$/D
+	PAT,
+	$sha
+);
 preg_match( '/^[ \t]*Plugin Name:.*$/m', $doc );
 preg_match( '/(?m)^value$/', $doc );
 preg_match( '/(?am)^value$/', $doc );
@@ -689,6 +702,19 @@ namespace GlobalCases {
 	preg_match( "/^foo\x24/", $value );
 	preg_match( "/^foo\X24/", $value );
 	preg_match( b'/^binary$/', $value );
+	preg_match( ( '/^parenthesized$/' ), $value );
+	preg_match(
+		<<<'PAT'
+		/^nowdoc$/
+		PAT,
+		$value
+	);
+	preg_match(
+		<<<PAT
+		/^heredoc$/
+		PAT,
+		$value
+	);
 	preg_match( '/\A(?:a|b$)/', $value );
 	preg_match( '/(*atomic:value$)/', $value );
 	preg_match( '/\Q[\Evalue$/', $value );
@@ -722,7 +748,7 @@ $/x',
 }
 PHP;
 list($security_status, $security_messages) = $security_pcre_run( $security_pcre_invalid );
-if ( 1 !== $security_status || 39 !== count( $security_messages ) ) {
+if ( 1 !== $security_status || 42 !== count( $security_messages ) ) {
 	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite, WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Write process-local CLI diagnostics to STDOUT or STDERR without a WordPress runtime. Encode machine-readable fixture data or CLI diagnostics without WordPress helpers.
 	fwrite( STDERR, 'Unanchored PCRE end-dollar patterns were missed by RANSecurity: ' . json_encode( $security_messages ) . "\n" );
 	exit( 1 );

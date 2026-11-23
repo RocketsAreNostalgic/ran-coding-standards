@@ -175,7 +175,7 @@ final class StrictEndAnchorSniff implements Sniff {
 		}
 
 		$pattern_ptr = $literal['ptr'];
-		$pattern     = $this->decode_literal( $literal['raw'] );
+		$pattern     = $literal['pattern'];
 		$parsed      = $this->split_pcre_pattern( $pattern );
 		if ( null === $parsed ) {
 			return;
@@ -382,22 +382,86 @@ final class StrictEndAnchorSniff implements Sniff {
 	}
 
 	/**
-	 * Extract one complete constant string literal (including physically multiline tokens)
-	 * from a parameter range.
+	 * Extract and decode one complete constant string literal (plain, multiline, binary-prefixed,
+	 * parenthesized, nowdoc, or variable-free heredoc) from a parameter range.
 	 *
 	 * @param File $phpcs_file The file being checked.
 	 * @param int  $start      First token in the parameter.
 	 * @param int  $end        Last token in the parameter.
-	 * @return array{ptr:int,raw:string}|null
+	 * @return array{ptr:int,pattern:string}|null
 	 */
 	private function extract_single_literal( File $phpcs_file, int $start, int $end ): ?array {
-		$tokens          = $phpcs_file->getTokens();
-		$first           = null;
-		$last_str        = null;
-		$seen_binary_pfx = false;
-		$raw             = '';
+		$tokens = $phpcs_file->getTokens();
 
-		for ( $i = $start; $i <= $end; ++$i ) {
+		// Unwrap matching outer grouping parentheses around the expression.
+		while ( $start <= $end ) {
+			$first_non_empty = $this->find_non_empty_in_range( $tokens, $start, $end, 1 );
+			$last_non_empty  = $this->find_non_empty_in_range( $tokens, $end, $start, -1 );
+			if ( null === $first_non_empty || null === $last_non_empty ) {
+				return null;
+			}
+			if (
+				'T_OPEN_PARENTHESIS' === $tokens[ $first_non_empty ]['type']
+				&& isset( $tokens[ $first_non_empty ]['parenthesis_closer'] )
+				&& (int) $tokens[ $first_non_empty ]['parenthesis_closer'] === $last_non_empty
+			) {
+				$start = $first_non_empty + 1;
+				$end   = $last_non_empty - 1;
+				continue;
+			}
+			$start = $first_non_empty;
+			$end   = $last_non_empty;
+			break;
+		}
+
+		if ( $start > $end ) {
+			return null;
+		}
+
+		$cursor = $start;
+		if ( 'T_BINARY_CAST' === $tokens[ $cursor ]['type'] ) {
+			$after_cast = $this->find_non_empty_in_range( $tokens, $cursor + 1, $end, 1 );
+			if ( null === $after_cast ) {
+				return null;
+			}
+			$cursor = $after_cast;
+		}
+
+		$token_type = is_string( $tokens[ $cursor ]['type'] ?? null ) ? $tokens[ $cursor ]['type'] : '';
+		if ( 'T_START_NOWDOC' === $token_type || 'T_START_HEREDOC' === $token_type ) {
+			if ( ! isset( $tokens[ $cursor ]['scope_closer'] ) ) {
+				return null;
+			}
+			$closer = (int) $tokens[ $cursor ]['scope_closer'];
+			if ( $closer > $end ) {
+				return null;
+			}
+			if ( null !== $this->find_non_empty_in_range( $tokens, $closer + 1, $end, 1 ) ) {
+				return null;
+			}
+			$body = $this->strip_flexible_doc_indent(
+				TextStrings::getCompleteTextString( $phpcs_file, $cursor, false ),
+				$tokens[ $closer ]['content']
+			);
+			if ( 'T_START_HEREDOC' === $token_type ) {
+				$stripped = TextStrings::getStripEmbeds( $body );
+				if ( array() !== $stripped['embeds'] ) {
+					return null;
+				}
+				$body = $this->decode_double_quoted_body( $body, false );
+			}
+
+			return array(
+				'ptr'     => $cursor,
+				'pattern' => $body,
+			);
+		}
+
+		$first    = null;
+		$last_str = null;
+		$raw      = '';
+
+		for ( $i = $cursor; $i <= $end; ++$i ) {
 			if ( T_CONSTANT_ENCAPSED_STRING === $tokens[ $i ]['code'] ) {
 				if ( null === $first ) {
 					$first = $i;
@@ -406,10 +470,6 @@ final class StrictEndAnchorSniff implements Sniff {
 				}
 				$last_str = $i;
 				$raw     .= $tokens[ $i ]['content'];
-				continue;
-			}
-			if ( null === $first && ! $seen_binary_pfx && 'T_BINARY_CAST' === $tokens[ $i ]['type'] ) {
-				$seen_binary_pfx = true;
 				continue;
 			}
 			if ( $this->is_empty_token( $tokens[ $i ] ) ) {
@@ -423,9 +483,52 @@ final class StrictEndAnchorSniff implements Sniff {
 		}
 
 		return array(
-			'ptr' => $first,
-			'raw' => $raw,
+			'ptr'     => $first,
+			'pattern' => $this->decode_literal( $raw ),
 		);
+	}
+
+	/**
+	 * Find the nearest non-empty token within inclusive bounds [$from, $limit] (or [$limit, $from]).
+	 *
+	 * @param array<int, array<string, mixed>> $tokens File token stack.
+	 * @param int                              $from   Starting token index.
+	 * @param int                              $limit  Inclusive stopping index.
+	 * @param int                              $step   Search direction (+1 or -1).
+	 * @return int|null
+	 */
+	private function find_non_empty_in_range( array $tokens, int $from, int $limit, int $step ): ?int {
+		for ( $i = $from; $step > 0 ? $i <= $limit : $i >= $limit; $i += $step ) {
+			if ( isset( $tokens[ $i ] ) && ! $this->is_empty_token( $tokens[ $i ] ) ) {
+				return $i;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Strip PHP 7.3+ flexible nowdoc/heredoc indentation matching the closing marker.
+	 *
+	 * @param string $body         Raw nowdoc/heredoc body without the final trailing line break.
+	 * @param string $closing_line Raw T_END_NOWDOC / T_END_HEREDOC token content.
+	 * @return string
+	 */
+	private function strip_flexible_doc_indent( string $body, string $closing_line ): string {
+		$indent_len = strspn( $closing_line, " \t" );
+		if ( 0 === $indent_len || '' === $body ) {
+			return $body;
+		}
+		$indent = substr( $closing_line, 0, $indent_len );
+		$lines  = explode( "\n", $body );
+		foreach ( $lines as &$line ) {
+			if ( 0 === strpos( $line, $indent ) ) {
+				$line = substr( $line, $indent_len );
+			}
+		}
+		unset( $line );
+
+		return implode( "\n", $lines );
 	}
 
 	/**
@@ -488,6 +591,18 @@ final class StrictEndAnchorSniff implements Sniff {
 			return $result;
 		}
 
+		return $this->decode_double_quoted_body( $unquoted, true );
+	}
+
+	/**
+	 * Decode PHP double-quoted or heredoc escape sequences in a single pass.
+	 *
+	 * @param string $unquoted       Body bytes without surrounding delimiters.
+	 * @param bool   $unescape_quote Whether \" unescapes to " (true for double-quoted strings, false for heredocs).
+	 * @return string
+	 */
+	private function decode_double_quoted_body( string $unquoted, bool $unescape_quote ): string {
+		$length         = strlen( $unquoted );
 		$simple_escapes = array(
 			'n'  => "\n",
 			'r'  => "\r",
@@ -496,9 +611,11 @@ final class StrictEndAnchorSniff implements Sniff {
 			'e'  => "\e",
 			'f'  => "\f",
 			'\\' => '\\',
-			'"'  => '"',
 			'$'  => '$',
 		);
+		if ( $unescape_quote ) {
+			$simple_escapes['"'] = '"';
+		}
 
 		$result = '';
 		for ( $i = 0; $i < $length; ++$i ) {
